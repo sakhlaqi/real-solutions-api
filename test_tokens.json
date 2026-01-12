@@ -1,0 +1,20 @@
+{
+  "tenants": [
+    {
+      "id": "a6995562-0253-47e7-b76d-6b86e0bc61ce",
+      "name": "Acme Corporation",
+      "slug": "acme",
+      "user": "acme_user",
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzY4MjYwODg2LCJpYXQiOjE3NjgyNTcyODYsImp0aSI6Ijg1Y2JlZGUxNGJhNDQ2OGE4NTk4MmJmMWU1NDEzMDllIiwidXNlcl9pZCI6MiwidGVuYW50IjoiYTY5OTU1NjItMDI1My00N2U3LWI3NmQtNmI4NmUwYmM2MWNlIiwiYXVkIjoicmVhbC1zb2x1dGlvbnMtYXBpIiwiaXNzIjoicmVhbC1zb2x1dGlvbnMtYXBpIn0.0CdSbOiVR1oSxrlNGIP6Ull7sA-HFS3FjXFsI0hrPgs",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc2ODg2MjA4NiwiaWF0IjoxNzY4MjU3Mjg2LCJqdGkiOiI1NGNiNzU3MWYzNGU0MDIzYjk0NjFjZWI4MDM4YzVkZCIsInVzZXJfaWQiOjIsInRlbmFudCI6ImE2OTk1NTYyLTAyNTMtNDdlNy1iNzZkLTZiODZlMGJjNjFjZSIsImF1ZCI6InJlYWwtc29sdXRpb25zLWFwaSIsImlzcyI6InJlYWwtc29sdXRpb25zLWFwaSJ9.s_RdMJVLMCAk3EGtsicfm41sx379JFE6Zc1qVCljy1k"
+    },
+    {
+      "id": "0f0c29ad-7c28-4a23-afa9-365f067113ac",
+      "name": "Beta Solutions",
+      "slug": "beta",
+      "user": "beta_user",
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzY4MjYwODg2LCJpYXQiOjE3NjgyNTcyODYsImp0aSI6ImY2MWMyOWQ1Yjk0ZDRkNTdhMjBkOTM4ZDIxOWEwN2JmIiwidXNlcl9pZCI6MywidGVuYW50IjoiMGYwYzI5YWQtN2MyOC00YTIzLWFmYTktMzY1ZjA2NzExM2FjIiwiYXVkIjoicmVhbC1zb2x1dGlvbnMtYXBpIiwiaXNzIjoicmVhbC1zb2x1dGlvbnMtYXBpIn0.XkwmrPuyV5Fwn98p-c2suAo3P3exmxdbV106qtQ3sps",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc2ODg2MjA4NiwiaWF0IjoxNzY4MjU3Mjg2LCJqdGkiOiJhNzA4MDNhYzIwNmE0ODEwOWVmZjgxOTU0YTViYmU5YyIsInVzZXJfaWQiOjMsInRlbmFudCI6IjBmMGMyOWFkLTdjMjgtNGEyMy1hZmE5LTM2NWYwNjcxMTNhYyIsImF1ZCI6InJlYWwtc29sdXRpb25zLWFwaSIsImlzcyI6InJlYWwtc29sdXRpb25zLWFwaSJ9.hgM_eWsFySmV0dCtiGjz8LdrPTNK9USgoVWoTT66poU"
+    }
+  ]
+}
