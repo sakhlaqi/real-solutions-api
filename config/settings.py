@@ -121,6 +121,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.authentication.authentication.TenantJWTAuthentication',
+        'apps.authentication.authentication.APIClientJWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -136,6 +137,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
         'user': '1000/hour',
+        'api_client_token': '10/minute',  # Strict rate limit for token issuance
+        'api_client_refresh': '30/minute',  # More lenient for refresh
+        'per_client': '1000/hour',  # Default per-client rate limit
     },
 }
 
@@ -143,31 +147,45 @@ REST_FRAMEWORK = {
 # JWT CONFIGURATION
 # ============================================================================
 SIMPLE_JWT = {
+    # Token lifetimes - short-lived access, longer-lived refresh
     'ACCESS_TOKEN_LIFETIME': timedelta(
-        minutes=config('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', default=60, cast=int)
+        minutes=config('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', default=15, cast=int)  # 15 minutes
     ),
     'REFRESH_TOKEN_LIFETIME': timedelta(
-        days=config('JWT_REFRESH_TOKEN_LIFETIME_DAYS', default=7, cast=int)
+        days=config('JWT_REFRESH_TOKEN_LIFETIME_DAYS', default=7, cast=int)  # 7 days
     ),
+    
+    # Token rotation and blacklisting
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
     
+    # Signing algorithm and keys
     'ALGORITHM': config('JWT_ALGORITHM', default='HS256'),
     'SIGNING_KEY': config('JWT_SIGNING_KEY', default=SECRET_KEY),
     'VERIFYING_KEY': None,
+    
+    # JWT standard claims (best practices)
     'AUDIENCE': config('JWT_AUDIENCE', default='multitenant-api'),
     'ISSUER': config('JWT_ISSUER', default='multitenant-api'),
     
+    # Headers and claim configuration
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
     
+    # Token classes
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
     
+    # JWT ID for uniqueness
     'JTI_CLAIM': 'jti',
+    
+    # Sliding tokens (disabled by default)
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
 # ============================================================================
@@ -271,3 +289,19 @@ LOGGING = {
 # Create logs directory if it doesn't exist
 LOGS_DIR = BASE_DIR / 'logs'
 LOGS_DIR.mkdir(exist_ok=True)
+
+# ============================================================================
+# API CLIENT CONFIGURATION
+# ============================================================================
+# Rate limits for API client authentication
+API_CLIENT_TOKEN_RATE = config('API_CLIENT_TOKEN_RATE', default='10/minute')
+API_CLIENT_REFRESH_RATE = config('API_CLIENT_REFRESH_RATE', default='30/minute')
+PER_CLIENT_DEFAULT_RATE = config('PER_CLIENT_DEFAULT_RATE', default='1000/hour')
+
+# Additional security for production
+if not DEBUG:
+    # HTTPS only for API client authentication
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    
+    # Additional headers for security
+    SECURE_REFERRER_POLICY = 'same-origin'

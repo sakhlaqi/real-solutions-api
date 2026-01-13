@@ -44,6 +44,8 @@ class TenantMiddleware(MiddlewareMixin):
             '/api/v1/auth/token/',
             '/api/v1/auth/token/refresh/',
             '/api/v1/auth/token/verify/',
+            '/api/v1/auth/api-client/token/',
+            '/api/v1/auth/api-client/token/refresh/',
         ]
         if any(request.path.startswith(path) for path in public_paths):
             return None

@@ -120,3 +120,129 @@ class IsServiceAccount(permissions.BasePermission):
         # Check if request has service_name attribute
         # (set by ServiceToServiceAuthentication)
         return hasattr(request, 'service_name')
+
+
+class IsAPIClient(permissions.BasePermission):
+    """
+    Permission class for API client authentication.
+    
+    Verifies that the request is authenticated via API client credentials.
+    """
+    
+    message = "This endpoint requires API client authentication."
+    
+    def has_permission(self, request, view):
+        """
+        Check if request is from an authenticated API client.
+        
+        Args:
+            request: Django request object
+            view: DRF view
+            
+        Returns:
+            bool: True if request is from an API client
+        """
+        return hasattr(request, 'api_client') and request.api_client is not None
+
+
+class HasAPIClientRole(permissions.BasePermission):
+    """
+    Permission class to check if API client has required role(s).
+    
+    Usage:
+        class MyView(APIView):
+            permission_classes = [IsAPIClient, HasAPIClientRole]
+            required_roles = ['admin', 'write']  # Client needs any of these roles
+    """
+    
+    message = "Your API client does not have the required role."
+    
+    def has_permission(self, request, view):
+        """
+        Check if API client has required role.
+        
+        Args:
+            request: Django request object
+            view: DRF view (must have 'required_roles' attribute)
+            
+        Returns:
+            bool: True if API client has at least one required role
+        """
+        if not hasattr(request, 'api_client') or not request.api_client:
+            return False
+        
+        # Get required roles from view
+        required_roles = getattr(view, 'required_roles', [])
+        if not required_roles:
+            return True  # No specific roles required
+        
+        # Check if client has any of the required roles
+        client_roles = set(request.api_client.roles)
+        return bool(client_roles.intersection(required_roles))
+
+
+class HasAPIClientScope(permissions.BasePermission):
+    """
+    Permission class to check if API client has required scope(s).
+    
+    Usage:
+        class MyView(APIView):
+            permission_classes = [IsAPIClient, HasAPIClientScope]
+            required_scopes = ['read:projects', 'write:projects']
+    """
+    
+    message = "Your API client does not have the required scope."
+    
+    def has_permission(self, request, view):
+        """
+        Check if API client has required scope.
+        
+        Args:
+            request: Django request object
+            view: DRF view (must have 'required_scopes' attribute)
+            
+        Returns:
+            bool: True if API client has at least one required scope
+        """
+        if not hasattr(request, 'api_client') or not request.api_client:
+            return False
+        
+        # Get required scopes from view
+        required_scopes = getattr(view, 'required_scopes', [])
+        if not required_scopes:
+            return True  # No specific scopes required
+        
+        # Check if client has any of the required scopes
+        client_scopes = set(request.api_client.scopes)
+        return bool(client_scopes.intersection(required_scopes))
+
+
+class IsAPIClientOrUser(permissions.BasePermission):
+    """
+    Permission that allows both API clients and regular authenticated users.
+    
+    Useful for endpoints that should be accessible by both authentication methods.
+    """
+    
+    message = "Authentication required (API client or user)."
+    
+    def has_permission(self, request, view):
+        """
+        Check if request is from either an API client or authenticated user.
+        
+        Args:
+            request: Django request object
+            view: DRF view
+            
+        Returns:
+            bool: True if authenticated via any method
+        """
+        # Check API client authentication
+        if hasattr(request, 'api_client') and request.api_client:
+            return True
+        
+        # Check user authentication
+        if request.user and request.user.is_authenticated:
+            return True
+        
+        return False

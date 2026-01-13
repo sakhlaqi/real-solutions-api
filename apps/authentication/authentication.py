@@ -1,5 +1,5 @@
 """
-Custom JWT Authentication with tenant extraction.
+Custom JWT Authentication with tenant extraction and API client support.
 """
 
 import logging
@@ -199,6 +199,146 @@ class ServiceToServiceAuthentication(JWTAuthentication):
             raise AuthenticationFailed('Invalid tenant in token')
         
         if not tenant.is_active:
+            raise AuthenticationFailed(f"Tenant '{tenant.slug}' is not active")
+        
+        return tenant
+
+
+class APIClientJWTAuthentication(JWTAuthentication):
+    """
+    JWT authentication for API clients (service accounts).
+    
+    This authentication class validates JWT tokens issued to API clients
+    and performs additional checks:
+    
+    1. Validates JWT signature and expiration
+    2. Validates the token was issued to an API client (client_type='service_account')
+    3. Extracts and validates tenant information
+    4. Verifies API client is still active
+    5. Verifies token version for revocation support
+    6. Attaches API client and tenant to request
+    
+    This allows API clients to authenticate and access protected endpoints.
+    """
+    
+    def authenticate(self, request):
+        """
+        Authenticate API client request.
+        
+        Args:
+            request: Django request object
+            
+        Returns:
+            tuple: (None, validated_token) - API clients don't have a user
+            
+        Raises:
+            AuthenticationFailed: If authentication fails
+        """
+        # Validate JWT token
+        header = self.get_header(request)
+        if header is None:
+            return None
+        
+        raw_token = self.get_raw_token(header)
+        if raw_token is None:
+            return None
+        
+        validated_token = self.get_validated_token(raw_token)
+        
+        # Verify this is an API client token
+        client_type = validated_token.get('client_type')
+        if client_type != 'service_account':
+            # Not an API client token, let other auth classes handle it
+            return None
+        
+        # Extract and validate API client
+        try:
+            api_client = self._get_api_client_from_token(validated_token)
+            tenant = self._get_tenant_from_token(validated_token)
+            
+            # Verify token version for revocation support
+            token_version = validated_token.get('token_version')
+            if token_version != api_client.token_version:
+                logger.warning(
+                    f"Token version mismatch for client {api_client.client_id}"
+                )
+                raise AuthenticationFailed('Token has been revoked')
+            
+            # Attach API client and tenant to request
+            request.api_client = api_client
+            request.tenant = tenant
+            request.auth_type = 'api_client'
+            
+            logger.debug(
+                f"Authenticated API client {api_client.client_id} "
+                f"for tenant {tenant.slug}"
+            )
+            
+            # Return None for user (API clients don't have users)
+            return None, validated_token
+            
+        except Exception as e:
+            logger.error(f"API client authentication error: {str(e)}", exc_info=True)
+            raise AuthenticationFailed('API client authentication failed')
+    
+    def _get_api_client_from_token(self, token):
+        """
+        Extract and validate API client from JWT token.
+        
+        Args:
+            token: Validated JWT token object
+            
+        Returns:
+            APIClient instance
+            
+        Raises:
+            AuthenticationFailed: If client is invalid or inactive
+        """
+        from .models import APIClient
+        
+        client_id = token.get('client_id')
+        if not client_id:
+            raise AuthenticationFailed('Token missing client_id claim')
+        
+        try:
+            api_client = APIClient.objects.select_related('tenant').get(
+                client_id=client_id
+            )
+        except APIClient.DoesNotExist:
+            logger.warning(f"API client not found: {client_id}")
+            raise AuthenticationFailed('Invalid API client')
+        
+        if not api_client.is_active:
+            logger.warning(f"Inactive API client: {client_id}")
+            raise AuthenticationFailed('API client is disabled')
+        
+        return api_client
+    
+    def _get_tenant_from_token(self, token):
+        """
+        Extract and validate tenant from JWT token.
+        
+        Args:
+            token: Validated JWT token object
+            
+        Returns:
+            Tenant instance
+            
+        Raises:
+            AuthenticationFailed: If tenant is invalid or inactive
+        """
+        tenant_id = token.get('tenant_id')
+        if not tenant_id:
+            raise AuthenticationFailed('Token missing tenant_id claim')
+        
+        try:
+            tenant = Tenant.objects.get(id=tenant_id)
+        except Tenant.DoesNotExist:
+            logger.warning(f"Tenant not found: {tenant_id}")
+            raise AuthenticationFailed('Invalid tenant')
+        
+        if not tenant.is_active:
+            logger.warning(f"Inactive tenant: {tenant.slug}")
             raise AuthenticationFailed(f"Tenant '{tenant.slug}' is not active")
         
         return tenant

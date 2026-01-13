@@ -1,15 +1,22 @@
 """
-Custom views for JWT token generation with tenant support.
+Custom views for JWT token generation with tenant support and API client authentication.
 """
 
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.exceptions import InvalidToken
 from django.contrib.auth import get_user_model
+from drf_spectacular.utils import extend_schema, OpenApiResponse
+from .serializers import (
+    APIClientTokenObtainSerializer,
+    APIClientRefreshSerializer
+)
+from .throttling import APIClientTokenThrottle, APIClientRefreshThrottle
 
 User = get_user_model()
 
@@ -132,3 +139,137 @@ class TenantTokenObtainPairView(TokenObtainPairView):
     serializer_class = TenantTokenObtainPairSerializer
     permission_classes = [AllowAny]
     parser_classes = [JSONParser, FormParser, MultiPartParser]  # Accept JSON and form data
+
+
+class APIClientTokenObtainView(APIView):
+    """
+    API Client token issuance endpoint.
+    
+    Authenticates using client_id + client_secret and returns JWT tokens.
+    Suitable for machine-to-machine and service account authentication.
+    
+    Features:
+    - Secure secret verification (constant-time comparison)
+    - Rate limiting to prevent brute-force attacks
+    - Audit logging of authentication attempts
+    - IP whitelist support
+    - Token versioning for revocation
+    
+    POST /api/v1/auth/api-client/token/
+    {
+        "client_id": "client_a1b2c3d4e5f6",
+        "client_secret": "your-secret-key"
+    }
+    
+    Returns:
+    {
+        "access": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+        "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+        "access_token_expires_at": 1234567890,
+        "refresh_token_expires_at": 1234567890,
+        "token_type": "Bearer"
+    }
+    """
+    
+    permission_classes = [AllowAny]
+    throttle_classes = [APIClientTokenThrottle]
+    serializer_class = APIClientTokenObtainSerializer
+    
+    @extend_schema(
+        request=APIClientTokenObtainSerializer,
+        responses={
+            200: OpenApiResponse(
+                description="JWT tokens issued successfully"
+            ),
+            400: OpenApiResponse(
+                description="Invalid credentials or validation error"
+            ),
+            429: OpenApiResponse(
+                description="Rate limit exceeded"
+            ),
+        },
+        tags=['Authentication - API Clients'],
+        summary="Obtain JWT tokens using API client credentials",
+        description=(
+            "Exchange API client credentials (client_id + client_secret) "
+            "for JWT access and refresh tokens. "
+            "This endpoint is for machine-to-machine authentication."
+        )
+    )
+    def post(self, request, *args, **kwargs):
+        """
+        Handle API client token requests.
+        """
+        serializer = self.serializer_class(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+            return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Return generic error message for security
+            return Response(
+                {'detail': 'Authentication failed'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
+class APIClientRefreshTokenView(APIView):
+    """
+    API Client token refresh endpoint.
+    
+    Exchange a refresh token for a new access token.
+    
+    POST /api/v1/auth/api-client/token/refresh/
+    {
+        "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+    }
+    
+    Returns:
+    {
+        "access": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+        "access_token_expires_at": 1234567890,
+        "token_type": "Bearer"
+    }
+    """
+    
+    permission_classes = [AllowAny]
+    throttle_classes = [APIClientRefreshThrottle]
+    serializer_class = APIClientRefreshSerializer
+    
+    @extend_schema(
+        request=APIClientRefreshSerializer,
+        responses={
+            200: OpenApiResponse(
+                description="New access token issued"
+            ),
+            400: OpenApiResponse(
+                description="Invalid or expired refresh token"
+            ),
+            429: OpenApiResponse(
+                description="Rate limit exceeded"
+            ),
+        },
+        tags=['Authentication - API Clients'],
+        summary="Refresh access token",
+        description=(
+            "Exchange a valid refresh token for a new access token. "
+            "The refresh token remains valid and can be reused."
+        )
+    )
+    def post(self, request, *args, **kwargs):
+        """
+        Handle token refresh requests.
+        """
+        serializer = self.serializer_class(data=request.data)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+            return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {'detail': 'Invalid or expired refresh token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )

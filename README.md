@@ -1,6 +1,6 @@
 # Multi-Tenant Django API Service
 
-A production-grade Django backend service that operates strictly as an API-only, multi-tenant data layer with JWT-based authentication and strict tenant isolation.
+A production-grade Django backend service that operates strictly as an API-only, multi-tenant data layer with JWT-based authentication, API client support, and strict tenant isolation.
 
 ## 🎯 Overview
 
@@ -8,8 +8,22 @@ This service provides:
 - **API-Only Architecture**: No UI, templates, or server-side rendering
 - **Multi-Tenant Support**: Shared infrastructure with strict data isolation
 - **JWT Authentication**: Token-based authentication with tenant identification
+- **API Client Authentication**: Machine-to-machine authentication using client_id + client_secret
 - **Tenant Isolation**: Automatic tenant scoping at all layers (ORM, views, middleware)
 - **Production-Ready**: Comprehensive security, logging, and error handling
+
+## 🔑 Authentication Methods
+
+### 1. User Authentication (Username + Password)
+Traditional user authentication with JWT tokens:
+- Endpoint: `POST /api/v1/auth/token/`
+- Returns: JWT access + refresh tokens with tenant claims
+
+### 2. API Client Authentication (Client ID + Secret) **NEW!**
+Machine-to-machine authentication for service accounts:
+- Endpoint: `POST /api/v1/auth/api-client/token/`
+- Returns: JWT access + refresh tokens with tenant, roles, and scopes
+- **See [API_CLIENT_AUTH.md](./API_CLIENT_AUTH.md) for complete guide**
 
 ## 🏗️ Architecture
 
@@ -17,22 +31,23 @@ This service provides:
 
 1. **Tenant Resolution**: Extracted from JWT token (`tenant` claim)
 2. **Authentication Layer**: Custom JWT authentication with tenant validation
-3. **Middleware**: Automatic tenant context injection into requests
-4. **ORM Layer**: Tenant-scoped managers and querysets
-5. **API Layer**: Tenant-filtered views and serializers
+3. **API Client System**: Secure client credentials with hashed secrets
+4. **Middleware**: Automatic tenant context injection into requests
+5. **ORM Layer**: Tenant-scoped managers and querysets
+6. **API Layer**: Tenant-filtered views and serializers
 
 ### Request Lifecycle
 
 ```
 1. Client Request with JWT Token
    ↓
-2. TenantJWTAuthentication validates token
+2. TenantJWTAuthentication or APIClientJWTAuthentication validates token
    ↓
 3. Extracts 'tenant' claim from JWT
    ↓
 4. Resolves Tenant object from database
    ↓
-5. Attaches request.tenant
+5. Attaches request.tenant (and request.api_client for API clients)
    ↓
 6. TenantMiddleware validates tenant is active
    ↓
