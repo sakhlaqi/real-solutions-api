@@ -5,7 +5,8 @@
 A **production-grade Django backend service** with:
 - ✅ API-only architecture (no templates/UI)
 - ✅ Multi-tenant support with strict isolation
-- ✅ JWT authentication with tenant identification
+- ✅ Dual authentication: User (username/password) + API Client (client_id/secret)
+- ✅ JWT tokens with best practices (iss, aud, sub, exp, iat, jti)
 - ✅ Automatic tenant-scoped queries at all layers
 - ✅ Complete CRUD operations for example models
 - ✅ OpenAPI/Swagger documentation
@@ -221,6 +222,11 @@ Response (tenant-scoped data only)
 | [API_EXAMPLES.md](API_EXAMPLES.md) | Detailed API usage examples |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Deep-dive into tenant isolation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deployment checklist |
+| [AUTHENTICATION_METHODS.md](AUTHENTICATION_METHODS.md) | Comparison of user vs API client auth |
+| [API_CLIENT_AUTH.md](API_CLIENT_AUTH.md) | Complete API client authentication guide |
+| [API_CLIENT_QUICKSTART.md](API_CLIENT_QUICKSTART.md) | Quick reference for API clients |
+| [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | Migration guide for existing deployments |
+| [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) | Technical implementation details |
 
 ---
 
@@ -233,11 +239,24 @@ Response (tenant-scoped data only)
 - Admin interface for tenant management
 
 ### Authentication
-- JWT-based authentication with `djangorestframework-simplejwt`
+
+**User Authentication:**
+- JWT-based with `djangorestframework-simplejwt`
 - Custom `TenantJWTAuthentication` class
+- Username/password login
 - Token includes required `tenant` claim
-- Service-to-service authentication support
-- Token generation utilities
+
+**API Client Authentication (NEW!):**
+- Machine-to-machine authentication
+- `client_id` + `client_secret` credentials
+- Custom `APIClientJWTAuthentication` class
+- Secure secret storage (hashed, never plaintext)
+- Token versioning for revocation
+- Rate limiting per client
+- IP whitelisting support
+- Roles and scopes system
+- Audit logging (APIClientUsageLog)
+- Management command: `create_api_client`
 
 ### Data Models (Examples)
 - **Project**: Tenant-scoped project management
@@ -253,9 +272,15 @@ All models:
 ### API Endpoints
 
 #### Authentication
-- `POST /api/v1/auth/token/` - Get JWT token
-- `POST /api/v1/auth/token/refresh/` - Refresh token
+
+**User Authentication:**
+- `POST /api/v1/auth/token/` - Get JWT token (username/password)
+- `POST /api/v1/auth/token/refresh/` - Refresh user token
 - `POST /api/v1/auth/token/verify/` - Verify token
+
+**API Client Authentication:**
+- `POST /api/v1/auth/api-client/token/` - Get JWT token (client_id/secret)
+- `POST /api/v1/auth/api-client/token/refresh/` - Refresh API client token
 
 #### Projects
 - `GET /api/v1/projects/` - List (paginated)
@@ -331,16 +356,38 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
+### Create API Clients (For M2M Authentication)
+
+```bash
+# Create an API client for a service
+python manage.py create_api_client \
+  --name "Data Sync Service" \
+  --tenant "acme" \
+  --roles "read,write" \
+  --scopes "read:projects,write:projects" \
+  --rate-limit 5000
+
+# The command outputs client_id and client_secret - save them securely!
+```
+
 ---
 
 ## 🔐 Security Features
 
-- JWT signature validation
-- Token expiration enforcement
-- Tenant claim requirement
+- JWT signature validation with best practices (iss, aud, sub, exp, iat, jti)
+- Token expiration enforcement (15 min access, 7 day refresh)
+- Tenant claim requirement in all tokens
 - Active tenant validation
+- API client secret hashing (PBKDF2)
+- Constant-time secret comparison
+- Token versioning for revocation
 - CORS configuration
-- Rate limiting (1000 req/hour per user)
+- Rate limiting:
+  - User: 1000 req/hour
+  - API client token: 10 req/min
+  - Per-client: customizable
+- IP whitelisting (optional per client)
+- Audit logging for API clients
 - HTTPS enforcement (production)
 - Security headers (HSTS, X-Frame-Options, etc.)
 - SQL injection prevention (ORM)
@@ -383,11 +430,28 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete checklist.
 This service is ideal for:
 
 1. **SaaS Applications**: Each customer is a tenant
+   - User auth for web/mobile apps
+   - API client auth for integrations and automation
+
 2. **Multi-Organization Platforms**: Departments or organizations as tenants
+   - User auth for employees
+   - API client auth for inter-service communication
+
 3. **Reseller Platforms**: Each reseller is a tenant
+   - User auth for reseller portal
+   - API client auth for white-label integrations
+
 4. **White-Label Services**: Each brand is a tenant
+   - User auth for end users
+   - API client auth for backend services
+
 5. **Enterprise Applications**: Business units as tenants
+   - User auth for internal users
+   - API client auth for scheduled jobs and microservices
+
 6. **API Backends**: Service layer for mobile/web apps
+   - User auth for app users
+   - API client auth for server-side operations
 
 ---
 

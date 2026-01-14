@@ -113,6 +113,19 @@ python manage.py create_test_data
 # This creates test_tokens.json with JWT tokens for testing
 ```
 
+### 4b. Create API Client (Optional)
+
+```bash
+# Create an API client for machine-to-machine authentication
+python manage.py create_api_client \
+  --name "My Service" \
+  --tenant "acme" \
+  --roles "read,write" \
+  --scopes "read:projects,write:projects"
+
+# Save the client_id and client_secret shown in the output!
+```
+
 ### 5. Run Development Server
 
 ```bash
@@ -137,12 +150,25 @@ All API endpoints require JWT authentication. Include the token in the `Authoriz
 Authorization: Bearer <your-jwt-token>
 ```
 
+**Two Authentication Methods Available:**
+
+1. **User Authentication** - For human users and interactive applications
+2. **API Client Authentication** - For services, automation, and machine-to-machine communication
+
+See [AUTHENTICATION_METHODS.md](./AUTHENTICATION_METHODS.md) for detailed comparison and usage.
+
 ### Available Endpoints
 
 #### Authentication
-- `POST /api/v1/auth/token/` - Obtain JWT token
+
+**User Authentication (Username + Password):**
+- `POST /api/v1/auth/token/` - Obtain JWT token with username/password
 - `POST /api/v1/auth/token/refresh/` - Refresh JWT token
 - `POST /api/v1/auth/token/verify/` - Verify JWT token
+
+**API Client Authentication (Client ID + Secret):**
+- `POST /api/v1/auth/api-client/token/` - Obtain JWT token with client credentials
+- `POST /api/v1/auth/api-client/token/refresh/` - Refresh API client token
 
 #### Projects
 - `GET /api/v1/projects/` - List all projects (tenant-scoped)
@@ -193,7 +219,7 @@ The `tenant` claim is **required** and must reference a valid, active tenant UUI
 
 ## 🧪 Testing the API
 
-### Using cURL
+### Using cURL (User Authentication)
 
 ```bash
 # Load test tokens
@@ -213,6 +239,21 @@ curl -X POST \
 # Get project statistics
 curl -H "Authorization: Bearer $TOKEN" \
      http://localhost:8000/api/v1/projects/statistics/
+```
+
+### Using cURL (API Client Authentication)
+
+```bash
+# Get API client token
+RESPONSE=$(curl -X POST http://localhost:8000/api/v1/auth/api-client/token/ \
+  -H "Content-Type: application/json" \
+  -d '{"client_id":"YOUR_CLIENT_ID","client_secret":"YOUR_SECRET"}')
+
+TOKEN=$(echo $RESPONSE | jq -r '.access')
+
+# Use the token
+curl -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8000/api/v1/projects/
 ```
 
 ### Using Python
@@ -303,10 +344,19 @@ api/
 │   │   ├── middleware.py       # Tenant resolution middleware
 │   │   └── admin.py            # Admin interface
 │   ├── authentication/         # JWT authentication
-│   │   ├── authentication.py   # TenantJWTAuthentication class
-│   │   ├── permissions.py      # Custom permissions
+│   │   ├── models.py           # APIClient & APIClientUsageLog
+│   │   ├── authentication.py   # TenantJWTAuthentication & APIClientJWTAuthentication
+│   │   ├── permissions.py      # Custom permissions (IsAPIClient, HasAPIClientRole, etc.)
+│   │   ├── serializers.py      # Token serializers
+│   │   ├── tokens.py           # Custom JWT token classes
+│   │   ├── throttling.py       # Rate limiting
+│   │   ├── views.py            # Token endpoints
+│   │   ├── admin.py            # Admin interface for API clients
 │   │   ├── utils.py            # Token generation utilities
-│   │   └── urls.py             # Auth endpoints
+│   │   ├── urls.py             # Auth endpoints
+│   │   └── management/
+│   │       └── commands/
+│   │           └── create_api_client.py  # API client creation
 │   └── core/                   # Core business logic
 │       ├── models.py           # Example models (Project, Task, Document)
 │       ├── serializers.py      # DRF serializers
@@ -320,7 +370,12 @@ api/
 ├── requirements.txt            # Python dependencies
 ├── .env.example                # Environment variables template
 ├── .gitignore                  # Git ignore rules
-└── README.md                   # This file
+├── README.md                   # This file
+├── AUTHENTICATION_METHODS.md   # Comparison of auth methods
+├── API_CLIENT_AUTH.md          # Complete API client guide
+├── API_CLIENT_QUICKSTART.md    # Quick reference for API clients
+├── MIGRATION_GUIDE.md          # Migration guide for deployments
+└── IMPLEMENTATION_SUMMARY.md   # Technical implementation details
 ```
 
 ## 🔧 Development Guide
