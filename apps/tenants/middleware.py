@@ -36,6 +36,15 @@ class TenantMiddleware(MiddlewareMixin):
         if not request.path.startswith('/api/'):
             return None
         
+        # Check if this is a public tenant endpoint (by slug)
+        import re
+        if re.match(r'^/api/v1/tenants/[^/]+/?$', request.path):
+            # GET /tenants/{slug}/
+            return None
+        if re.match(r'^/api/v1/tenants/[^/]+/config/?$', request.path):
+            # GET /tenants/{slug}/config/
+            return None
+        
         # Skip for public endpoints (schema, docs, auth)
         public_paths = [
             '/api/schema/',
@@ -46,6 +55,8 @@ class TenantMiddleware(MiddlewareMixin):
             '/api/v1/auth/token/verify/',
             '/api/v1/auth/api-client/token/',
             '/api/v1/auth/api-client/token/refresh/',
+            '/api/v1/auth/login/',
+            '/api/v1/auth/register/',
         ]
         if any(request.path.startswith(path) for path in public_paths):
             return None

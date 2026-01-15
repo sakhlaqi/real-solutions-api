@@ -11,11 +11,20 @@ from .views import (
     TenantTokenObtainPairView,
     APIClientTokenObtainView,
     APIClientRefreshTokenView,
+    UserRegisterView,
+    UserLogoutView,
+    CurrentUserView,
 )
 
 app_name = 'authentication'
 
 urlpatterns = [
+    # User authentication endpoints
+    path('auth/login/', TenantTokenObtainPairView.as_view(), name='login'),
+    path('auth/register/', UserRegisterView.as_view(), name='register'),
+    path('auth/logout/', UserLogoutView.as_view(), name='logout'),
+    path('auth/me/', CurrentUserView.as_view(), name='current_user'),
+    
     # JWT Token endpoints (username/password)
     path('auth/token/', TenantTokenObtainPairView.as_view(), name='token_obtain'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

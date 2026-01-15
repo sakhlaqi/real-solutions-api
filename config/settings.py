@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Security Settings
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-in-production')
 DEBUG = config('DEBUG', default=False, cast=bool)
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,.localhost').split(',')
 
 # Application definition
 INSTALLED_APPS = [
@@ -201,6 +201,35 @@ CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:3000'
 ).split(',')
+
+# Allow regex patterns for localhost subdomains (e.g., acme.localhost:3000)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://[a-z0-9-]+\.localhost(:\d+)?$",  # Matches http://tenant.localhost:3000
+    r"^https://[a-z0-9-]+\.localhost(:\d+)?$", # Matches https://tenant.localhost:3000
+]
+
+# Add production patterns if not in DEBUG mode
+if not DEBUG:
+    # Get base domain from environment (e.g., yourdomain.com)
+    BASE_DOMAIN = config('BASE_DOMAIN', default='yourdomain.com')
+    # Escape dots for regex and add pattern for all tenant subdomains
+    CORS_ALLOWED_ORIGIN_REGEXES.append(
+        rf"^https://[a-z0-9-]+\.{BASE_DOMAIN.replace('.', r'\.')}$"
+    )
+    
+    # Add environment-specific subdomain patterns
+    APP_ENV = config('APP_ENV', default='development')
+    if APP_ENV == 'staging':
+        CORS_ALLOWED_ORIGIN_REGEXES.append(
+            rf"^https://[a-z0-9-]+\.staging\.{BASE_DOMAIN.replace('.', r'\.')}$"
+        )
+    elif APP_ENV == 'development':
+        # Support both http and https for dev environment
+        CORS_ALLOWED_ORIGIN_REGEXES.extend([
+            rf"^https://[a-z0-9-]+\.dev\.{BASE_DOMAIN.replace('.', r'\.')}$",
+            rf"^http://[a-z0-9-]+\.dev\.{BASE_DOMAIN.replace('.', r'\.')}$"
+        ])
+
 CORS_ALLOW_CREDENTIALS = True
 
 # ============================================================================
