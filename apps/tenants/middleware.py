@@ -65,7 +65,7 @@ class TenantMiddleware(MiddlewareMixin):
             return None
         
         # Skip public endpoints - tenant context handled elsewhere
-        if self._is_public_path(request.path):
+        if self._is_public_endpoint(request):
             return None
         
         # For authenticated endpoints, tenant extraction happens in
@@ -80,7 +80,7 @@ class TenantMiddleware(MiddlewareMixin):
         At this point, request.tenant should be set by TenantJWTAuthentication.
         """
         # Skip non-API and public endpoints
-        if not request.path.startswith('/api/') or self._is_public_endpoint(request:
+        if not request.path.startswith('/api/') or self._is_public_endpoint(request):
             return None
         
         # Check if tenant was set by authentication
