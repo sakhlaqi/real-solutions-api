@@ -12,8 +12,18 @@ from decouple import config
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Security Settings
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-in-production')
+# In production, SECRET_KEY MUST be set via environment variable
+_default_secret = 'django-insecure-change-this-in-production'
+SECRET_KEY = config('SECRET_KEY', default=_default_secret)
 DEBUG = config('DEBUG', default=False, cast=bool)
+
+# Validate SECRET_KEY in production
+if not DEBUG and SECRET_KEY == _default_secret:
+    raise ValueError(
+        "SECRET_KEY must be set via environment variable in production. "
+        "Generate a secure key using: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'"
+    )
+
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,.localhost').split(',')
 
 # Application definition

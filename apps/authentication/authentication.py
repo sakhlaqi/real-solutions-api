@@ -3,10 +3,14 @@ Custom JWT Authentication with tenant extraction and API client support.
 """
 
 import logging
+from typing import Optional, Tuple, Any
 from django.conf import settings
+from rest_framework.request import Request
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
+from rest_framework_simplejwt.tokens import Token
 from apps.tenants.models import Tenant
+from apps.core.constants import JWTClaims, ClientType, AuthType, ErrorMessages
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +82,7 @@ class TenantJWTAuthentication(JWTAuthentication):
         
         return user, validated_token
     
-    def _get_tenant_from_token(self, token):
+    def _get_tenant_from_token(self, token: Token) -> Tenant:
         """
         Extract and validate tenant from JWT token.
         
@@ -92,8 +96,8 @@ class TenantJWTAuthentication(JWTAuthentication):
             AuthenticationFailed: If tenant claim is missing or invalid
             Tenant.DoesNotExist: If tenant doesn't exist in database
         """
-        # Get tenant claim name from settings
-        tenant_claim = getattr(settings, 'TENANT_CLAIM_NAME', 'tenant')
+        # Use centralized claim name constant
+        tenant_claim = getattr(settings, 'TENANT_CLAIM_NAME', JWTClaims.TENANT)
         
         # Extract tenant ID from token
         tenant_id = token.get(tenant_claim)
@@ -106,9 +110,9 @@ class TenantJWTAuthentication(JWTAuthentication):
                 f"Token must include '{tenant_claim}' claim"
             )
         
-        # Fetch tenant from database
+        # Fetch tenant from database with minimal query
         try:
-            tenant = Tenant.objects.get(id=tenant_id)
+            tenant = Tenant.objects.only('id', 'slug', 'is_active', 'name').get(id=tenant_id)
         except Tenant.DoesNotExist:
             logger.warning(f"Invalid tenant ID in token: {tenant_id}")
             raise
@@ -118,9 +122,7 @@ class TenantJWTAuthentication(JWTAuthentication):
             logger.warning(
                 f"Attempt to authenticate with inactive tenant: {tenant.slug}"
             )
-            raise AuthenticationFailed(
-                f"Tenant '{tenant.slug}' is not active"
-            )
+            raise AuthenticationFailed(ErrorMessages.TENANT_INACTIVE)
         
         return tenant
 
@@ -281,7 +283,7 @@ class APIClientJWTAuthentication(JWTAuthentication):
             logger.error(f"API client authentication error: {str(e)}", exc_info=True)
             raise AuthenticationFailed('API client authentication failed')
     
-    def _get_api_client_from_token(self, token):
+    def _get_api_client_from_token(self, token: Token) -> Any:
         """
         Extract and validate API client from JWT token.
         
@@ -296,14 +298,15 @@ class APIClientJWTAuthentication(JWTAuthentication):
         """
         from .models import APIClient
         
-        client_id = token.get('client_id')
+        client_id = token.get(JWTClaims.CLIENT_ID)
         if not client_id:
-            raise AuthenticationFailed('Token missing client_id claim')
+            raise AuthenticationFailed(f'Token missing {JWTClaims.CLIENT_ID} claim')
         
         try:
-            api_client = APIClient.objects.select_related('tenant').get(
-                client_id=client_id
-            )
+            api_client = APIClient.objects.select_related('tenant').only(
+                'id', 'client_id', 'is_active', 'token_version', 'roles', 'scopes',
+                'tenant__id', 'tenant__slug', 'tenant__is_active'
+            ).get(client_id=client_id)
         except APIClient.DoesNotExist:
             logger.warning(f"API client not found: {client_id}")
             raise AuthenticationFailed('Invalid API client')
@@ -314,7 +317,7 @@ class APIClientJWTAuthentication(JWTAuthentication):
         
         return api_client
     
-    def _get_tenant_from_token(self, token):
+    def _get_tenant_from_token(self, token: Token) -> Tenant:
         """
         Extract and validate tenant from JWT token.
         
@@ -326,19 +329,29 @@ class APIClientJWTAuthentication(JWTAuthentication):
             
         Raises:
             AuthenticationFailed: If tenant is invalid or inactive
+        
+        Note:
+            For API clients, we use the same 'tenant' claim as user tokens
+            for consistency. The APIClient model stores the tenant relationship,
+            which is validated against the token claim.
         """
-        tenant_id = token.get('tenant_id')
+        # Use consistent tenant claim name
+        tenant_claim = getattr(settings, 'TENANT_CLAIM_NAME', JWTClaims.TENANT)
+        tenant_id = token.get(tenant_claim)
+        
         if not tenant_id:
-            raise AuthenticationFailed('Token missing tenant_id claim')
+            raise AuthenticationFailed(f'Token missing {tenant_claim} claim')
         
         try:
-            tenant = Tenant.objects.get(id=tenant_id)
+            tenant = Tenant.objects.only('id', 'slug', 'is_active', 'name').get(id=tenant_id)
         except Tenant.DoesNotExist:
             logger.warning(f"Tenant not found: {tenant_id}")
             raise AuthenticationFailed('Invalid tenant')
         
         if not tenant.is_active:
             logger.warning(f"Inactive tenant: {tenant.slug}")
-            raise AuthenticationFailed(f"Tenant '{tenant.slug}' is not active")
+            raise AuthenticationFailed(ErrorMessages.TENANT_INACTIVE)
+        
+        return tenant
         
         return tenant

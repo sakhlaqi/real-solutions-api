@@ -2,6 +2,8 @@
 
 A production-grade Django backend service that operates strictly as an API-only, multi-tenant data layer with JWT-based authentication, API client support, and strict tenant isolation.
 
+> **Latest Version:** 1.1.0 | [View Changelog](./CHANGELOG.md)
+
 ## 🎯 Overview
 
 This service provides:
@@ -296,6 +298,26 @@ print(response.json())
 ```
 
 ## 🛡️ Security Features
+
+### Defense-in-Depth Architecture
+
+Tenant isolation is enforced at **6 layers**:
+
+| Layer | Component | Protection |
+|-------|-----------|------------|
+| 1 | Authentication | JWT tenant claim extraction |
+| 2 | Middleware | Tenant validation and logging |
+| 3 | Permission | `IsTenantUser` validates context |
+| 4 | View | `TenantScopedViewSetMixin` filters querysets |
+| 5 | Serializer | Validates cross-tenant references |
+| 6 | Model | `TenantAwareModel.save()` enforces tenant |
+
+### Request Tracing
+
+All requests include correlation IDs for distributed tracing:
+- **Request Header**: `X-Correlation-ID` (auto-generated if not provided)
+- **Response Header**: `X-Correlation-ID` (same value echoed back)
+- **Response Header**: `X-Response-Time` (processing duration in ms)
 
 ### Tenant Isolation Guarantees
 
