@@ -47,19 +47,25 @@ This document explains how tenant isolation is implemented and enforced at every
 
 **Component**: `TenantMiddleware`
 
-**Responsibility**: Secondary validation and request context management
+**Responsibility**: Secondary validation, request lifecycle management, and public endpoint handling
 
 **Process**:
 ```python
-1. Check if request path requires tenant context
-2. Extract Authorization header
-3. Decode JWT token
-4. Extract tenant claim
-5. Resolve Tenant object
-6. Validate tenant is active
-7. Attach to request.tenant
-8. Log tenant context
+1. Add correlation ID and timing to request
+2. Check if request path is public endpoint (via URL resolution)
+3. Skip tenant validation for public endpoints
+4. For protected endpoints:
+   - Validate tenant was set by authentication
+   - Verify tenant is active (defense in depth)
+   - Log tenant context for audit trail
+5. Add correlation ID and timing to response headers
 ```
+
+**Public Endpoint Management**:
+- Public endpoints defined in `apps/core/public_endpoints.py`
+- Uses Django URL resolution (not hardcoded paths)
+- Checks URL names (e.g., `authentication:login`) for flexibility
+- Supports method-level restrictions (e.g., GET only)
 
 **Security Guarantees**:
 - ✅ Runs after authentication, provides redundancy
@@ -67,8 +73,10 @@ This document explains how tenant isolation is implemented and enforced at every
 - ✅ Validates tenant status (active/inactive)
 - ✅ Returns 403 for inactive tenants
 - ✅ Logs all tenant resolution attempts
+- ✅ Public endpoints centrally managed (single source of truth)
+- ✅ Dynamic URL patterns work automatically (no regex needed)
 
-**Code Location**: `apps/tenants/middleware.py`
+**Code Location**: `apps/tenants/middleware.py`, `apps/core/public_endpoints.py`
 
 ---
 

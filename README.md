@@ -51,14 +51,28 @@ Machine-to-machine authentication for service accounts:
    ↓
 5. Attaches request.tenant (and request.api_client for API clients)
    ↓
-6. TenantMiddleware validates tenant is active
+6. TenantMiddleware checks if endpoint is public (via apps/core/public_endpoints.py)
    ↓
-7. Views automatically filter data by request.tenant
+7. For protected endpoints: validates tenant is active
    ↓
-8. Serializers validate cross-tenant references
+8. Views automatically filter data by request.tenant
    ↓
-9. Response sent (tenant-scoped data only)
+9. Serializers validate cross-tenant references
+   ↓
+10. Response sent (tenant-scoped data only)
 ```
+
+### Public Endpoints
+
+Public endpoints (no authentication required) are centrally managed in `apps/core/public_endpoints.py`:
+- Authentication endpoints (login, register, token operations)
+- Public tenant lookups (by slug)
+- API documentation (schema, Swagger, ReDoc)
+
+Benefits:
+- **Maintainable**: URL names instead of hardcoded paths
+- **Flexible**: Automatic support for dynamic routes
+- **Secure**: Method-level access control per endpoint
 
 ## 📋 Prerequisites
 

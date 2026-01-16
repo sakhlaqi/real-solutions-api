@@ -4,6 +4,23 @@
 
 Successfully implemented all required API endpoints for the dual-mode multi-tenant React application.
 
+## Public Endpoints Management
+
+Public endpoints are centrally managed in `apps/core/public_endpoints.py`. This provides:
+- Single source of truth for endpoints that don't require authentication
+- URL name-based configuration (maintainable across URL pattern changes)
+- Method-level control (e.g., GET allowed, POST restricted)
+- Automatic support for dynamic routes (slug, UUID parameters)
+
+To add a new public endpoint, update the registry:
+```python
+from apps.core.public_endpoints import PublicEndpoint
+
+PUBLIC_ENDPOINTS.append(
+    PublicEndpoint('app_name:endpoint_name', {'GET', 'POST'})
+)
+```
+
 ## Implemented Endpoints
 
 ### Public Endpoints (No Authentication Required)
@@ -97,6 +114,38 @@ Successfully implemented all required API endpoints for the dual-mode multi-tena
 - **GET** `/api/v1/projects/{id}/tasks/` - List tasks for project
 - **GET** `/api/v1/projects/statistics/` - Get project statistics
 
+## Public Endpoints Configuration
+
+All public endpoints are registered in `/apps/core/public_endpoints.py`:
+
+```python
+# Public authentication endpoints
+PUBLIC_AUTH_ENDPOINTS = [
+    PublicEndpoint('authentication:login', {'POST'}),
+    PublicEndpoint('authentication:register', {'POST'}),
+    PublicEndpoint('authentication:token_obtain', {'POST'}),
+    PublicEndpoint('authentication:token_refresh', {'POST'}),
+    PublicEndpoint('authentication:token_verify', {'POST'}),
+    PublicEndpoint('authentication:api_client_token', {'POST'}),
+    PublicEndpoint('authentication:api_client_refresh', {'POST'}),
+]
+
+# Public tenant endpoints
+PUBLIC_TENANT_ENDPOINTS = [
+    PublicEndpoint('tenants:tenant-by-slug', {'GET'}),
+    PublicEndpoint('tenants:tenant-config-by-slug', {'GET'}),
+]
+
+# Public documentation endpoints
+PUBLIC_DOC_ENDPOINTS = ['schema', 'swagger-ui', 'redoc']
+```
+
+**Benefits:**
+- Maintainable: Change URL patterns without updating middleware
+- Flexible: Supports dynamic routes automatically
+- Secure: Method-level access control
+- Clear: Single location for all public endpoint definitions
+
 ## Files Created/Modified
 
 ### Created Files
@@ -104,11 +153,13 @@ Successfully implemented all required API endpoints for the dual-mode multi-tena
 2. `/apps/tenants/views.py` - Tenant API views
 3. `/apps/tenants/urls.py` - Tenant URL configuration
 4. `/apps/tenants/management/commands/create_sample_data.py` - Sample data command
+5. `/apps/core/public_endpoints.py` - Centralized public endpoints registry
 
 ### Modified Files
 1. `/apps/authentication/views.py` - Added register, logout, me endpoints
 2. `/apps/authentication/urls.py` - Added new authentication routes
-3. `/config/urls.py` - Included tenant URLs
+3. `/apps/tenants/middleware.py` - Updated to use URL resolution for public endpoint detection
+4. `/config/urls.py` - Included tenant URLs
 
 ## Tenant Configuration Structure
 
