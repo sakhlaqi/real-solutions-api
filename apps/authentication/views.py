@@ -2,6 +2,7 @@
 Custom views for JWT token generation with tenant support and API client authentication.
 """
 
+import threading
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,6 +21,9 @@ from .serializers import (
 from .throttling import APIClientTokenThrottle, APIClientRefreshThrottle
 
 User = get_user_model()
+
+# Thread-local storage for tenant during token generation
+_thread_locals = threading.local()
 
 
 class TenantTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -60,8 +64,12 @@ class TenantTokenObtainPairSerializer(TokenObtainPairSerializer):
         """
         token = super().get_token(user)
         
-        # Get tenant from request context (set in validate method)
-        tenant = getattr(user, '_tenant_for_token', None)
+        # Try to get tenant from thread-local storage (set in validate method)
+        tenant = getattr(_thread_locals, 'current_tenant', None)
+        
+        # Fallback to user attribute if thread-local not set
+        if not tenant:
+            tenant = getattr(user, '_tenant_for_token', None)
         
         if tenant:
             # Add tenant claim
@@ -120,10 +128,19 @@ class TenantTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Remove email from attrs before calling super
         attrs.pop('email', None)
         
-        # Authenticate user
-        data = super().validate(attrs)
+        # First, authenticate the user manually to get the user object
+        from django.contrib.auth import authenticate as django_authenticate
+        user = django_authenticate(
+            self.context.get('request'),
+            username=attrs.get('username'),
+            password=attrs.get('password')
+        )
         
-        # Resolve tenant
+        if user is None:
+            raise InvalidToken({'detail': 'No active account found with the given credentials'})
+        
+        # Now resolve tenant before token generation
+        from apps.tenants.models import Tenant
         tenant = None
         if tenant_identifier:
             # Try to find tenant by slug or ID
@@ -137,14 +154,11 @@ class TenantTokenObtainPairSerializer(TokenObtainPairSerializer):
                         'tenant': 'Invalid tenant identifier'
                     })
         else:
-            # If no tenant provided, try to get user default tenant
-            # This assumes your User model has a relation to Tenant
-            # Adjust this logic based on your actual User model
-            if hasattr(self.user, 'tenant'):
-                tenant = self.user.tenant
-            elif hasattr(self.user, 'tenants'):
-                # If user belongs to multiple tenants, get the first active one
-                tenant = self.user.tenants.filter(is_active=True).first()
+            # If no tenant provided, try to get user's default tenant
+            if hasattr(user, 'tenant'):
+                tenant = user.tenant
+            elif hasattr(user, 'tenants'):
+                tenant = user.tenants.filter(is_active=True).first()
         
         if not tenant:
             raise InvalidToken({
@@ -156,10 +170,23 @@ class TenantTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'tenant': f'Tenant {tenant.slug} is not active'
             })
         
-        # Attach tenant to user for token generation
-        self.user._tenant_for_token = tenant
+        # Store tenant in thread-local storage BEFORE calling super().validate()
+        # This allows get_token() classmethod to access the tenant
+        _thread_locals.current_tenant = tenant
         
-        return data
+        # Also attach tenant to user as fallback
+        user._tenant_for_token = tenant
+        self.user = user
+        
+        try:
+            # Now call parent to generate tokens (which will use get_token)
+            data = super().validate(attrs)
+            
+            return data
+        finally:
+            # Clean up thread-local storage
+            if hasattr(_thread_locals, 'current_tenant'):
+                delattr(_thread_locals, 'current_tenant')
 
 
 class TenantTokenObtainPairView(TokenObtainPairView):
@@ -170,10 +197,11 @@ class TenantTokenObtainPairView(TokenObtainPairView):
     JWT tokens with tenant claims based on username/password + tenant.
     
     POST /api/v1/auth/token/
+    OR /api/v1/auth/login/
     {
-        "username": "user@example.com",
+        "email": "user@example.com",  (or "username")
         "password": "password123",
-        "tenant": "acme-corp"
+        "tenant": "acme"  (optional, will use user's default tenant)
     }
     
     Returns:
