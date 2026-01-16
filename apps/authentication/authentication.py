@@ -3,9 +3,8 @@ Custom JWT Authentication with tenant extraction and API client support.
 """
 
 import logging
-from typing import Optional, Tuple, Any
+from typing import Any
 from django.conf import settings
-from rest_framework.request import Request
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
 from rest_framework_simplejwt.tokens import Token
@@ -351,7 +350,5 @@ class APIClientJWTAuthentication(JWTAuthentication):
         if not tenant.is_active:
             logger.warning(f"Inactive tenant: {tenant.slug}")
             raise AuthenticationFailed(ErrorMessages.TENANT_INACTIVE)
-        
-        return tenant
         
         return tenant

@@ -16,13 +16,14 @@ The authentication class is the primary source of tenant context for protected r
 """
 
 import logging
-import re
 import time
 import uuid
-from typing import Optional, List, Set
+from typing import Optional
 from django.http import JsonResponse, HttpRequest, HttpResponse
+from django.urls import resolve, Resolver404
 from django.utils.deprecation import MiddlewareMixin
 from django.conf import settings
+from apps.core.public_endpoints import get_public_url_names, is_method_allowed
 from .models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -40,29 +41,14 @@ class TenantMiddleware(MiddlewareMixin):
     
     Note: Primary tenant extraction happens in TenantJWTAuthentication.
     This middleware adds logging and validation as a secondary check.
+    
+    Public endpoints are defined in apps.core.public_endpoints for centralized management.
     """
     
-    # Cached set of public paths for O(1) lookup
-    _public_paths: Set[str] = {
-        '/api/schema/',
-        '/api/docs/',
-        '/api/redoc/',
-        '/api/v1/auth/token/',
-        '/api/v1/auth/token/refresh/',
-        '/api/v1/auth/token/verify/',
-        '/api/v1/auth/api-client/token/',
-        '/api/v1/auth/api-client/token/refresh/',
-        '/api/v1/auth/login/',
-        '/api/v1/auth/register/',
-        '/api/v1/auth/logout/',
-    }
-    
-    # Compiled regex patterns for dynamic public routes
-    _public_patterns: List[re.Pattern] = [
-        re.compile(r'^/api/v1/tenants/[a-z0-9-]+/?$'),  # GET /tenants/{slug}/
-        re.compile(r'^/api/v1/tenants/[a-z0-9-]+/config/?$'),  # GET /tenants/{slug}/config/
-        re.compile(r'^/api/v1/auth/me/?$'),  # GET /auth/me/ needs auth but handled separately
-    ]
+    def __init__(self, get_response):
+        super().__init__(get_response)
+        # Cache public URL names for performance
+        self._public_url_names = get_public_url_names()
     
     def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
         """
@@ -93,8 +79,8 @@ class TenantMiddleware(MiddlewareMixin):
         This runs AFTER authentication but BEFORE the view.
         At this point, request.tenant should be set by TenantJWTAuthentication.
         """
-        # Skip non-API and public paths
-        if not request.path.startswith('/api/') or self._is_public_path(request.path):
+        # Skip non-API and public endpoints
+        if not request.path.startswith('/api/') or self._is_public_endpoint(request:
             return None
         
         # Check if tenant was set by authentication
@@ -138,18 +124,37 @@ class TenantMiddleware(MiddlewareMixin):
         
         return response
     
-    def _is_public_path(self, path: str) -> bool:
+    def _is_public_endpoint(self, request: HttpRequest) -> bool:
         """
-        Check if path is a public endpoint.
+        Check if request path is a public endpoint using Django URL resolution.
         
-        Uses both exact match and regex patterns for flexibility.
+        This method resolves the URL to its named pattern and checks against
+        the centralized public endpoints registry.
         """
-        # Exact match first (O(1))
-        if path.rstrip('/') + '/' in self._public_paths or path in self._public_paths:
-            return True
-        
-        # Regex patterns for dynamic routes
-        return any(pattern.match(path) for pattern in self._public_patterns)
+        try:
+            # Resolve URL to its named pattern
+            resolved = resolve(request.path)
+            
+            # Get full URL name (namespace:name or just name)
+            if resolved.namespace:
+                url_name = f"{resolved.namespace}:{resolved.url_name}"
+            else:
+                url_name = resolved.url_name
+            
+            # Check if URL is in public registry
+            if url_name in self._public_url_names:
+                # Verify HTTP method is allowed for this endpoint
+                return is_method_allowed(url_name, request.method)
+            
+            return False
+            
+        except Resolver404:
+            # URL doesn't exist, let Django handle the 404
+            return False
+        except Exception as e:
+            # Log unexpected errors but don't block request
+            logger.error(f"Error checking public endpoint: {e}", exc_info=True)
+            return False
     
     def _error_response(self, message: str, status: int = 400) -> JsonResponse:
         """
