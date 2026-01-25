@@ -2,7 +2,7 @@
 API views for tenant endpoints.
 """
 
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -146,18 +146,33 @@ class TenantViewSet(viewsets.ModelViewSet):
         return Tenant.objects.none()
 
 
-class ThemeViewSet(viewsets.ReadOnlyModelViewSet):
+class ThemeViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for Theme model - read-only access.
+    ViewSet for Theme model.
     
     Public endpoints (no authentication required):
     - GET /themes/ - List all preset themes (lightweight)
     - GET /themes/{id}/ - Get full theme by ID (including theme_json)
     
+    Authenticated endpoints (require tenant authentication):
+    - POST /themes/ - Create custom theme
+    - PUT /themes/{id}/ - Update custom theme
+    - PATCH /themes/{id}/ - Partially update custom theme
+    - DELETE /themes/{id}/ - Delete custom theme
+    
     Presets are always available to all tenants.
     Custom themes are only visible to their owning tenant.
+    Custom themes can extend presets using base_preset and token_overrides.
     """
-    permission_classes = [AllowAny]
+    
+    def get_permissions(self):
+        """
+        List and retrieve are public.
+        Create, update, delete require authentication.
+        """
+        if self.action in ['list', 'retrieve', 'presets']:
+            return [AllowAny()]
+        return [IsAuthenticated()]
     
     def get_queryset(self):
         """
@@ -182,6 +197,63 @@ class ThemeViewSet(viewsets.ReadOnlyModelViewSet):
             return ThemeListSerializer
         return ThemeSerializer
     
+    def perform_create(self, serializer):
+        """
+        Create custom theme for current tenant.
+        Auto-set tenant and created_by from request.
+        """
+        # Prevent creating presets via API
+        if serializer.validated_data.get('is_preset', False):
+            raise serializers.ValidationError(
+                "Cannot create preset themes via API. Use management command 'seed_theme_presets'."
+            )
+        
+        # Set tenant from request
+        if not hasattr(self.request, 'tenant'):
+            raise serializers.ValidationError("Tenant context required")
+        
+        serializer.save(
+            tenant=self.request.tenant,
+            created_by=self.request.user
+        )
+    
+    def perform_update(self, serializer):
+        """
+        Update custom theme.
+        Prevent updating presets and changing ownership.
+        """
+        instance = self.get_object()
+        
+        if instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot update preset themes. Preset themes are read-only."
+            )
+        
+        # Prevent changing tenant
+        if 'tenant' in serializer.validated_data:
+            if serializer.validated_data['tenant'] != instance.tenant:
+                raise serializers.ValidationError("Cannot change theme tenant")
+        
+        serializer.save()
+    
+    def perform_destroy(self, instance):
+        """
+        Delete custom theme.
+        Prevent deleting presets.
+        """
+        if instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot delete preset themes."
+            )
+        
+        # Check if any tenant is using this theme
+        if instance.tenants_using.exists():
+            raise serializers.ValidationError(
+                f"Cannot delete theme. {instance.tenants_using.count()} tenant(s) are using it."
+            )
+        
+        instance.delete()
+    
     @action(detail=False, methods=['get'])
     def presets(self, request):
         """
@@ -193,3 +265,91 @@ class ThemeViewSet(viewsets.ReadOnlyModelViewSet):
         presets = Theme.get_presets()
         serializer = ThemeListSerializer(presets, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        """
+        POST /themes/{id}/clone/
+        
+        Clone a theme (preset or custom) to create a new custom theme.
+        Optionally provide token_overrides to customize the clone.
+        
+        Request body:
+        {
+            "name": "My Custom Theme",
+            "version": "1.0.0",
+            "token_overrides": {
+                "colors": {"primary": "#ff0000"}
+            }
+        }
+        """
+        source_theme = self.get_object()
+        
+        name = request.data.get('name')
+        version = request.data.get('version', '1.0.0')
+        token_overrides = request.data.get('token_overrides', {})
+        
+        if not name:
+            raise serializers.ValidationError("Name is required")
+        
+        # Check if tenant already has a theme with this name
+        if Theme.objects.filter(
+            tenant=self.request.tenant,
+            name=name
+        ).exists():
+            raise serializers.ValidationError(
+                f"Theme with name '{name}' already exists for this tenant"
+            )
+        
+        # Create new theme extending the source
+        if source_theme.is_preset:
+            # Clone from preset - use inheritance
+            new_theme = Theme.objects.create(
+                name=name,
+                version=version,
+                is_preset=False,
+                tenant=self.request.tenant,
+                created_by=self.request.user,
+                base_preset=source_theme,
+                token_overrides=token_overrides,
+                theme_json={
+                    'meta': {
+                        'id': name.lower().replace(' ', '-'),
+                        'name': name,
+                        'version': version,
+                        'category': 'custom',
+                        'description': f"Based on {source_theme.name}"
+                    }
+                }
+            )
+        else:
+            # Clone from custom theme - create standalone copy
+            from .utils import deep_merge_tokens
+            
+            source_resolved = source_theme.get_resolved_theme_json()
+            merged_tokens = deep_merge_tokens(
+                source_resolved.get('tokens', {}),
+                token_overrides
+            )
+            
+            new_theme = Theme.objects.create(
+                name=name,
+                version=version,
+                is_preset=False,
+                tenant=self.request.tenant,
+                created_by=self.request.user,
+                theme_json={
+                    'meta': {
+                        'id': name.lower().replace(' ', '-'),
+                        'name': name,
+                        'version': version,
+                        'category': 'custom',
+                        'description': f"Based on {source_theme.name}"
+                    },
+                    'tokens': merged_tokens,
+                    'modes': source_resolved.get('modes', {})
+                }
+            )
+        
+        serializer = ThemeSerializer(new_theme)
+        return Response(serializer.data, status=201)

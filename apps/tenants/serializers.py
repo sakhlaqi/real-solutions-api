@@ -221,11 +221,14 @@ class TenantConfigSerializer(serializers.ModelSerializer):
 class ThemeSerializer(serializers.ModelSerializer):
     """
     Serializer for Theme model with read-only protection for presets.
+    Supports theme inheritance - custom themes can extend presets.
     """
     
     # Read-only fields
     is_read_only = serializers.SerializerMethodField()
     supported_modes = serializers.SerializerMethodField()
+    resolved_theme_json = serializers.SerializerMethodField()
+    inheritance_info = serializers.SerializerMethodField()
     
     class Meta:
         model = Theme
@@ -236,6 +239,10 @@ class ThemeSerializer(serializers.ModelSerializer):
             'is_preset',
             'is_read_only',
             'theme_json',
+            'base_preset',
+            'token_overrides',
+            'resolved_theme_json',
+            'inheritance_info',
             'tenant',
             'created_by',
             'created_at',
@@ -248,6 +255,8 @@ class ThemeSerializer(serializers.ModelSerializer):
             'updated_at',
             'is_read_only',
             'supported_modes',
+            'resolved_theme_json',
+            'inheritance_info',
         ]
     
     def get_is_read_only(self, obj):
@@ -255,9 +264,18 @@ class ThemeSerializer(serializers.ModelSerializer):
         return obj.is_read_only()
     
     def get_supported_modes(self, obj):
-        """Get list of supported mode names."""
-        modes = obj.theme_json.get('modes', {})
+        """Get list of supported mode names from resolved theme."""
+        resolved = obj.get_resolved_theme_json()
+        modes = resolved.get('modes', {})
         return list(modes.keys()) if modes else []
+    
+    def get_resolved_theme_json(self, obj):
+        """Get complete theme JSON (merged if inherited)."""
+        return obj.get_resolved_theme_json()
+    
+    def get_inheritance_info(self, obj):
+        """Get inheritance information."""
+        return obj.get_inheritance_info()
     
     def validate(self, attrs):
         """Validate theme data before save."""

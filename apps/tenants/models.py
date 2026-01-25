@@ -139,10 +139,11 @@ class Tenant(models.Model):
         if not self.theme:
             return None
         
-        meta = self.theme.theme_json.get('meta', {})
-        modes = list(self.theme.theme_json.get('modes', {}).keys())
+        resolved = self.theme.get_resolved_theme_json()
+        meta = resolved.get('meta', {})
+        modes = list(resolved.get('modes', {}).keys())
         
-        return {
+        metadata = {
             'id': str(self.theme.id),
             'name': self.theme.name,
             'version': self.theme.version,
@@ -151,16 +152,24 @@ class Tenant(models.Model):
             'available_modes': modes,
             'selected_modes': self.theme_modes,
         }
+        
+        # Add inheritance info if theme extends a preset
+        inheritance = self.theme.get_inheritance_info()
+        if inheritance:
+            metadata['based_on'] = inheritance['base_preset']
+            metadata['has_overrides'] = inheritance['has_overrides']
+        
+        return metadata
     
     def get_resolved_theme(self):
         """
-        Get the full theme JSON for this tenant.
-        Returns raw theme JSON without token resolution.
+        Get the full resolved theme JSON for this tenant.
+        If theme uses inheritance, returns merged tokens.
         """
         if not self.theme:
             return None
         
-        return self.theme.theme_json
+        return self.theme.get_resolved_theme_json()
 
 
 class TenantAwareModel(models.Model):
@@ -269,6 +278,23 @@ class Theme(models.Model):
         help_text=_("User who created this theme")
     )
     
+    # Theme inheritance - for custom themes based on presets
+    base_preset = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='derived_themes',
+        help_text=_("Base preset this theme extends (null for standalone themes)")
+    )
+    
+    # Token overrides - only changed tokens (merged with base at runtime)
+    token_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("Token overrides to apply over base preset (empty for standalone themes)")
+    )
+    
     # Timestamps
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -317,33 +343,45 @@ class Theme(models.Model):
         """Validate theme data before saving."""
         super().clean()
         
-        # Validate theme_json structure
-        if not self.theme_json:
-            raise ValidationError("theme_json cannot be empty")
-        
-        # Use comprehensive validator
-        try:
-            validate_theme_json(self.theme_json)
-        except ValidationError as e:
-            # Re-raise with more context
-            raise ValidationError(f"Invalid theme_json: {e}")
-        
-        # Ensure required fields exist in theme_json
-        meta = self.theme_json.get('meta', {})
-        
-        # Sync name and version with meta
-        theme_name = meta.get('name')
-        theme_version = meta.get('version')
-        
-        if self.name != theme_name:
-            raise ValidationError(
-                f"Theme name '{self.name}' must match theme_json.meta.name '{theme_name}'"
-            )
-        
-        if self.version != theme_version:
-            raise ValidationError(
-                f"Theme version '{self.version}' must match theme_json.meta.version '{theme_version}'"
-            )
+        # Validate theme_json structure (only for standalone themes)
+        if not self.base_preset:
+            # Standalone theme - must have complete theme_json
+            if not self.theme_json:
+                raise ValidationError("theme_json cannot be empty for standalone themes")
+            
+            # Use comprehensive validator
+            try:
+                validate_theme_json(self.theme_json)
+            except ValidationError as e:
+                # Re-raise with more context
+                raise ValidationError(f"Invalid theme_json: {e}")
+            
+            # Ensure required fields exist in theme_json
+            meta = self.theme_json.get('meta', {})
+            
+            # Sync name and version with meta
+            theme_name = meta.get('name')
+            theme_version = meta.get('version')
+            
+            if self.name != theme_name:
+                raise ValidationError(
+                    f"Theme name '{self.name}' must match theme_json.meta.name '{theme_name}'"
+                )
+            
+            if self.version != theme_version:
+                raise ValidationError(
+                    f"Theme version '{self.version}' must match theme_json.meta.version '{theme_version}'"
+                )
+        else:
+            # Inherited theme - validate base_preset and overrides
+            if self.base_preset.tenant is not None:
+                raise ValidationError("base_preset must be a preset theme (tenant must be None)")
+            
+            if not self.base_preset.is_preset:
+                raise ValidationError("base_preset must be a preset theme (is_preset must be True)")
+            
+            # Inherited themes can have minimal theme_json (just meta) or use base_preset's
+            # token_overrides contains the customizations
         
         # Presets cannot have a tenant
         if self.is_preset and self.tenant:
@@ -352,6 +390,14 @@ class Theme(models.Model):
         # Custom themes must have a tenant
         if not self.is_preset and not self.tenant:
             raise ValidationError("Non-preset themes must be associated with a tenant")
+        
+        # Presets cannot extend other themes
+        if self.is_preset and self.base_preset:
+            raise ValidationError("Preset themes cannot extend other themes")
+        
+        # Circular inheritance check
+        if self.base_preset and self.base_preset.base_preset:
+            raise ValidationError("Only one level of inheritance is supported")
     
     def save(self, *args, **kwargs):
         """Override save to enforce validation."""
@@ -362,6 +408,73 @@ class Theme(models.Model):
     def is_read_only(self):
         """Check if theme is read-only (presets are read-only)."""
         return self.is_preset
+    
+    def get_resolved_theme_json(self):
+        """
+        Get the complete resolved theme JSON.
+        For inherited themes, merges base_preset.theme_json with token_overrides.
+        For standalone themes, returns theme_json as-is.
+        """
+        if not self.base_preset:
+            # Standalone theme - return as-is
+            return self.theme_json
+        
+        # Inherited theme - merge base + overrides
+        from .utils import deep_merge_tokens
+        
+        base_theme = self.base_preset.theme_json
+        
+        # Build complete theme JSON
+        resolved = {
+            'meta': self.theme_json.get('meta', {}) if self.theme_json else {
+                'id': str(self.id),
+                'name': self.name,
+                'version': self.version,
+                'category': 'custom',
+                'description': f"Based on {self.base_preset.name}",
+                'based_on': {
+                    'id': str(self.base_preset.id),
+                    'name': self.base_preset.name,
+                    'version': self.base_preset.version
+                }
+            },
+            'tokens': deep_merge_tokens(
+                base_theme.get('tokens', {}),
+                self.token_overrides
+            ),
+            'modes': base_theme.get('modes', {})  # Inherit modes from base
+        }
+        
+        return resolved
+    
+    def get_inheritance_info(self):
+        """Get information about theme inheritance."""
+        if not self.base_preset:
+            return None
+        
+        return {
+            'base_preset': {
+                'id': str(self.base_preset.id),
+                'name': self.base_preset.name,
+                'version': self.base_preset.version
+            },
+            'has_overrides': bool(self.token_overrides),
+            'override_count': self._count_overrides(self.token_overrides)
+        }
+    
+    def _count_overrides(self, obj):
+        """Recursively count number of overridden tokens."""
+        count = 0
+        if isinstance(obj, dict):
+            for value in obj.values():
+                count += self._count_overrides(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                count += self._count_overrides(item)
+        else:
+            # Leaf value - count it
+            count = 1
+        return count
     
     @classmethod
     def get_presets(cls):
