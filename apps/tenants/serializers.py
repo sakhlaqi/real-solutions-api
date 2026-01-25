@@ -3,7 +3,8 @@ Serializers for tenant models.
 """
 
 from rest_framework import serializers
-from .models import Tenant
+from django.core.exceptions import ValidationError as DjangoValidationError
+from .models import Tenant, Theme
 
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -66,7 +67,21 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         })
     
     def get_theme(self, obj):
-        """Extract theme from metadata."""
+        """
+        Return theme metadata if theme is selected, otherwise legacy metadata theme.
+        
+        This maintains backward compatibility with existing tenants while
+        supporting the new theme system.
+        """
+        # New theme system - return theme metadata
+        theme_metadata = obj.get_theme_metadata()
+        if theme_metadata:
+            return {
+                'metadata': theme_metadata,
+                'json': obj.get_resolved_theme(),  # Full raw theme JSON
+            }
+        
+        # Legacy fallback - return old metadata-based theme
         default_theme = {
             'colors': {
                 'primary': '#0066cc',
@@ -201,3 +216,150 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         instance.save()
         
         return instance
+
+
+class ThemeSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Theme model with read-only protection for presets.
+    """
+    
+    # Read-only fields
+    is_read_only = serializers.SerializerMethodField()
+    supported_modes = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Theme
+        fields = [
+            'id',
+            'name',
+            'version',
+            'is_preset',
+            'is_read_only',
+            'theme_json',
+            'tenant',
+            'created_by',
+            'created_at',
+            'updated_at',
+            'supported_modes',
+        ]
+        read_only_fields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'is_read_only',
+            'supported_modes',
+        ]
+    
+    def get_is_read_only(self, obj):
+        """Presets are read-only."""
+        return obj.is_read_only()
+    
+    def get_supported_modes(self, obj):
+        """Get list of supported mode names."""
+        modes = obj.theme_json.get('modes', {})
+        return list(modes.keys()) if modes else []
+    
+    def validate(self, attrs):
+        """Validate theme data before save."""
+        # Prevent modification of presets
+        if self.instance and self.instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot modify preset themes. Preset themes are read-only."
+            )
+        
+        # Ensure name and version match theme_json
+        theme_json = attrs.get('theme_json', self.instance.theme_json if self.instance else None)
+        if theme_json:
+            meta = theme_json.get('meta', {})
+            
+            # Sync name
+            if 'name' in attrs and attrs['name'] != meta.get('name'):
+                raise serializers.ValidationError(
+                    f"Theme name must match theme_json.meta.name ('{meta.get('name')}')"
+                )
+            
+            # Sync version
+            if 'version' in attrs and attrs['version'] != meta.get('version'):
+                raise serializers.ValidationError(
+                    f"Theme version must match theme_json.meta.version ('{meta.get('version')}')"
+                )
+            
+            # Auto-sync if not explicitly set
+            if 'name' not in attrs and meta.get('name'):
+                attrs['name'] = meta['name']
+            if 'version' not in attrs and meta.get('version'):
+                attrs['version'] = meta['version']
+        
+        return attrs
+    
+    def create(self, validated_data):
+        """Create new theme (not allowed for presets)."""
+        if validated_data.get('is_preset', False):
+            raise serializers.ValidationError(
+                "Cannot create preset themes via API. Use management command 'seed_theme_presets'."
+            )
+        
+        # Set tenant from request context if not provided
+        if 'tenant' not in validated_data and self.context.get('request'):
+            # In a real implementation, you'd get tenant from request user/JWT
+            # For now, raise error if tenant not provided
+            raise serializers.ValidationError("Tenant is required for custom themes")
+        
+        # Set created_by from request user
+        if 'created_by' not in validated_data and self.context.get('request'):
+            validated_data['created_by'] = self.context['request'].user
+        
+        return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """Update theme (not allowed for presets)."""
+        if instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot update preset themes. Preset themes are read-only."
+            )
+        
+        # Prevent changing is_preset flag
+        if 'is_preset' in validated_data and validated_data['is_preset'] != instance.is_preset:
+            raise serializers.ValidationError("Cannot change is_preset flag")
+        
+        return super().update(instance, validated_data)
+
+
+class ThemeListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for listing themes (without full theme_json).
+    """
+    
+    is_read_only = serializers.SerializerMethodField()
+    supported_modes = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Theme
+        fields = [
+            'id',
+            'name',
+            'version',
+            'is_preset',
+            'is_read_only',
+            'category',
+            'tags',
+            'supported_modes',
+            'created_at',
+            'updated_at',
+        ]
+    
+    def get_is_read_only(self, obj):
+        return obj.is_read_only()
+    
+    def get_supported_modes(self, obj):
+        modes = obj.theme_json.get('modes', {})
+        return list(modes.keys()) if modes else []
+    
+    def get_category(self, obj):
+        return obj.theme_json.get('meta', {}).get('category')
+    
+    def get_tags(self, obj):
+        return obj.theme_json.get('meta', {}).get('tags', [])
+

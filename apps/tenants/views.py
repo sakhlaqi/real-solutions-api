@@ -9,8 +9,13 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from apps.authentication.permissions import IsTenantUser
-from .models import Tenant
-from .serializers import TenantSerializer, TenantConfigSerializer
+from .models import Tenant, Theme
+from .serializers import (
+    TenantSerializer, 
+    TenantConfigSerializer,
+    ThemeSerializer,
+    ThemeListSerializer,
+)
 
 
 class TenantBySlugView(APIView):
@@ -139,3 +144,52 @@ class TenantViewSet(viewsets.ModelViewSet):
             return Tenant.objects.filter(id=self.request.tenant.id)
         
         return Tenant.objects.none()
+
+
+class ThemeViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for Theme model - read-only access.
+    
+    Public endpoints (no authentication required):
+    - GET /themes/ - List all preset themes (lightweight)
+    - GET /themes/{id}/ - Get full theme by ID (including theme_json)
+    
+    Presets are always available to all tenants.
+    Custom themes are only visible to their owning tenant.
+    """
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        """
+        Return presets for unauthenticated users.
+        Return presets + tenant's custom themes for authenticated users.
+        """
+        # Get all presets (always visible)
+        queryset = Theme.objects.filter(is_preset=True)
+        
+        # Add tenant's custom themes if authenticated
+        if self.request.user.is_authenticated and hasattr(self.request, 'tenant'):
+            tenant_themes = Theme.objects.filter(tenant=self.request.tenant)
+            queryset = queryset | tenant_themes
+        
+        return queryset.order_by('-is_preset', 'name')
+    
+    def get_serializer_class(self):
+        """
+        Use lightweight serializer for list, full serializer for detail.
+        """
+        if self.action == 'list':
+            return ThemeListSerializer
+        return ThemeSerializer
+    
+    @action(detail=False, methods=['get'])
+    def presets(self, request):
+        """
+        GET /themes/presets/
+        
+        Get all preset themes (lightweight list).
+        Convenience endpoint for fetching only official presets.
+        """
+        presets = Theme.get_presets()
+        serializer = ThemeListSerializer(presets, many=True)
+        return Response(serializer.data)

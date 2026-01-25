@@ -5,7 +5,14 @@ Central to the multi-tenant architecture.
 
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 import uuid
+import json
+
+from .validators import validate_theme_json
+
+User = get_user_model()
 
 
 class Tenant(models.Model):
@@ -42,6 +49,22 @@ class Tenant(models.Model):
         help_text=_("Whether the tenant is active")
     )
     
+    # Theme selection
+    theme = models.ForeignKey(
+        'Theme',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tenants_using',
+        help_text=_("Selected theme for this tenant")
+    )
+    
+    theme_modes = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=_("Enabled theme modes (e.g., ['dark', 'compact'])")
+    )
+    
     # Timestamps
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -67,6 +90,7 @@ class Tenant(models.Model):
         indexes = [
             models.Index(fields=['slug']),
             models.Index(fields=['is_active']),
+            models.Index(fields=['theme']),
         ]
     
     def __str__(self):
@@ -75,11 +99,68 @@ class Tenant(models.Model):
     def __repr__(self):
         return f"<Tenant: {self.slug} (id={self.id})>"
     
+    def clean(self):
+        """Validate tenant data before saving."""
+        super().clean()
+        
+        # Validate theme selection
+        if self.theme:
+            # Can only select presets or custom themes owned by this tenant
+            if not self.theme.is_preset and self.theme.tenant != self:
+                raise ValidationError(
+                    "Can only select preset themes or custom themes owned by this tenant"
+                )
+        
+        # Validate theme_modes
+        if self.theme and self.theme_modes:
+            available_modes = list(self.theme.theme_json.get('modes', {}).keys())
+            for mode in self.theme_modes:
+                if mode not in available_modes:
+                    raise ValidationError(
+                        f"Theme mode '{mode}' is not available in selected theme. "
+                        f"Available modes: {', '.join(available_modes)}"
+                    )
+    
     def save(self, *args, **kwargs):
-        """Override save to ensure slug is lowercase."""
+        """Override save to ensure slug is lowercase and run validation."""
         if self.slug:
             self.slug = self.slug.lower()
+        
+        # Run validation
+        self.full_clean()
+        
         super().save(*args, **kwargs)
+    
+    def get_theme_metadata(self):
+        """
+        Get theme metadata without full theme JSON.
+        Returns lightweight theme info for API responses.
+        """
+        if not self.theme:
+            return None
+        
+        meta = self.theme.theme_json.get('meta', {})
+        modes = list(self.theme.theme_json.get('modes', {}).keys())
+        
+        return {
+            'id': str(self.theme.id),
+            'name': self.theme.name,
+            'version': self.theme.version,
+            'is_preset': self.theme.is_preset,
+            'category': meta.get('category'),
+            'available_modes': modes,
+            'selected_modes': self.theme_modes,
+        }
+    
+    def get_resolved_theme(self):
+        """
+        Get the full theme JSON for this tenant.
+        Returns raw theme JSON without token resolution.
+        """
+        if not self.theme:
+            return None
+        
+        return self.theme.theme_json
 
 
 class TenantAwareModel(models.Model):
@@ -122,3 +203,174 @@ class TenantAwareModel(models.Model):
                 f"Tenant must be set for {self.__class__.__name__} instance"
             )
         super().save(*args, **kwargs)
+
+
+class Theme(models.Model):
+    """
+    Theme model - stores theme presets and custom themes.
+    
+    Themes can be:
+    1. Global presets (isPreset=True, tenant=None) - read-only, official themes
+    2. Tenant-specific custom themes (isPreset=False, tenant=Tenant)
+    
+    Theme data is stored as JSON conforming to the UI library schema.
+    """
+    
+    # Unique identifier
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique theme identifier")
+    )
+    
+    # Theme name (must match themeJson.meta.name for consistency)
+    name = models.CharField(
+        max_length=255,
+        help_text=_("Theme name")
+    )
+    
+    # Theme version (semver format)
+    version = models.CharField(
+        max_length=20,
+        default='1.0.0',
+        help_text=_("Theme version (semantic versioning)")
+    )
+    
+    # Preset flag - true for official themes from UI library
+    is_preset = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=_("Whether this is an official preset theme")
+    )
+    
+    # Theme JSON data - conforms to UI library Theme schema
+    theme_json = models.JSONField(
+        help_text=_("Complete theme definition in JSON format")
+    )
+    
+    # Optional: Tenant owner (null for global presets)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='themes',
+        help_text=_("Tenant that owns this theme (null for presets)")
+    )
+    
+    # Creator (null for system-seeded presets)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_themes',
+        help_text=_("User who created this theme")
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("Theme creation timestamp")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Last update timestamp")
+    )
+    
+    class Meta:
+        db_table = 'themes'
+        verbose_name = _('Theme')
+        verbose_name_plural = _('Themes')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['is_preset']),
+            models.Index(fields=['tenant']),
+            models.Index(fields=['name']),
+        ]
+        constraints = [
+            # Presets must not have a tenant
+            models.CheckConstraint(
+                check=(
+                    models.Q(is_preset=True, tenant__isnull=True) |
+                    models.Q(is_preset=False)
+                ),
+                name='preset_themes_no_tenant'
+            ),
+            # Unique name per tenant (presets share global namespace)
+            models.UniqueConstraint(
+                fields=['name', 'tenant'],
+                name='unique_theme_name_per_tenant'
+            ),
+        ]
+    
+    def __str__(self):
+        preset_label = " [PRESET]" if self.is_preset else ""
+        tenant_label = f" ({self.tenant.slug})" if self.tenant else ""
+        return f"{self.name} v{self.version}{preset_label}{tenant_label}"
+    
+    def __repr__(self):
+        return f"<Theme: {self.name} v{self.version} (preset={self.is_preset})>"
+    
+    def clean(self):
+        """Validate theme data before saving."""
+        super().clean()
+        
+        # Validate theme_json structure
+        if not self.theme_json:
+            raise ValidationError("theme_json cannot be empty")
+        
+        # Use comprehensive validator
+        try:
+            validate_theme_json(self.theme_json)
+        except ValidationError as e:
+            # Re-raise with more context
+            raise ValidationError(f"Invalid theme_json: {e}")
+        
+        # Ensure required fields exist in theme_json
+        meta = self.theme_json.get('meta', {})
+        
+        # Sync name and version with meta
+        theme_name = meta.get('name')
+        theme_version = meta.get('version')
+        
+        if self.name != theme_name:
+            raise ValidationError(
+                f"Theme name '{self.name}' must match theme_json.meta.name '{theme_name}'"
+            )
+        
+        if self.version != theme_version:
+            raise ValidationError(
+                f"Theme version '{self.version}' must match theme_json.meta.version '{theme_version}'"
+            )
+        
+        # Presets cannot have a tenant
+        if self.is_preset and self.tenant:
+            raise ValidationError("Preset themes cannot be associated with a tenant")
+        
+        # Custom themes must have a tenant
+        if not self.is_preset and not self.tenant:
+            raise ValidationError("Non-preset themes must be associated with a tenant")
+    
+    def save(self, *args, **kwargs):
+        """Override save to enforce validation."""
+        # Run full_clean to trigger clean() method
+        self.full_clean()
+        super().save(*args, **kwargs)
+    
+    def is_read_only(self):
+        """Check if theme is read-only (presets are read-only)."""
+        return self.is_preset
+    
+    @classmethod
+    def get_presets(cls):
+        """Get all preset themes."""
+        return cls.objects.filter(is_preset=True).order_by('name')
+    
+    @classmethod
+    def get_tenant_themes(cls, tenant):
+        """Get all themes for a specific tenant (custom + presets)."""
+        return cls.objects.filter(
+            models.Q(tenant=tenant) | models.Q(is_preset=True)
+        ).order_by('-is_preset', 'name')

@@ -9,6 +9,7 @@ from .views import (
     TenantBySlugView,
     TenantConfigView,
     TenantConfigBySlugView,
+    ThemeViewSet,
 )
 
 app_name = 'tenants'
@@ -16,6 +17,7 @@ app_name = 'tenants'
 # Router for standard CRUD operations
 router = DefaultRouter()
 router.register(r'tenants', TenantViewSet, basename='tenant')
+router.register(r'themes', ThemeViewSet, basename='theme')
 
 urlpatterns = [
     # Public endpoints (no auth required)
