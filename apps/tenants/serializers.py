@@ -36,6 +36,7 @@ class TenantConfigSerializer(serializers.ModelSerializer):
     feature_flags = serializers.SerializerMethodField()
     layout_preferences = serializers.SerializerMethodField()
     landing_page_sections = serializers.SerializerMethodField()
+    routes = serializers.SerializerMethodField()
     
     class Meta:
         model = Tenant
@@ -49,6 +50,7 @@ class TenantConfigSerializer(serializers.ModelSerializer):
             'feature_flags',
             'layout_preferences',
             'landing_page_sections',
+            'routes',
             'created_at',
             'updated_at',
         ]
@@ -131,6 +133,36 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         """Extract landing page sections from metadata."""
         return obj.metadata.get('landing_page_sections', [])
     
+    def get_routes(self, obj):
+        """Extract dynamic routes configuration from metadata."""
+        default_routes = [
+            {
+                'path': '/',
+                'pagePath': '/',
+                'title': 'Home',
+                'protected': False,
+                'layout': 'main',
+                'order': 0
+            },
+            {
+                'path': '/login',
+                'pagePath': '/login',
+                'title': 'Login',
+                'protected': False,
+                'layout': 'none',
+                'order': 1
+            },
+            {
+                'path': '/admin',
+                'pagePath': '/dashboard',
+                'title': 'Dashboard',
+                'protected': True,
+                'layout': 'admin',
+                'order': 2
+            }
+        ]
+        return obj.metadata.get('routes', default_routes)
+    
     def update(self, instance, validated_data):
         """
         Update tenant configuration.
@@ -161,6 +193,9 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         
         if 'landing_page_sections' in request_data:
             metadata['landing_page_sections'] = request_data['landing_page_sections']
+        
+        if 'routes' in request_data:
+            metadata['routes'] = request_data['routes']
         
         instance.metadata = metadata
         instance.save()
