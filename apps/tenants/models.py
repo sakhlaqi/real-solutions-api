@@ -424,10 +424,14 @@ class Theme(models.Model):
         
         base_theme = self.base_preset.theme_json
         
-        # Build complete theme JSON
-        resolved = {
-            'meta': self.theme_json.get('meta', {}) if self.theme_json else {
-                'id': str(self.id),
+        # Get meta from theme_json if exists, otherwise create default
+        if self.theme_json and 'meta' in self.theme_json:
+            meta = self.theme_json['meta']
+        else:
+            # Create default meta based on base preset
+            base_meta = base_theme.get('meta', {})
+            meta = {
+                'id': base_meta.get('id', str(self.id)),
                 'name': self.name,
                 'version': self.version,
                 'category': 'custom',
@@ -437,7 +441,11 @@ class Theme(models.Model):
                     'name': self.base_preset.name,
                     'version': self.base_preset.version
                 }
-            },
+            }
+        
+        # Build complete theme JSON
+        resolved = {
+            'meta': meta,
             'tokens': deep_merge_tokens(
                 base_theme.get('tokens', {}),
                 self.token_overrides
