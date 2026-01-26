@@ -35,9 +35,8 @@ class TenantConfigSerializer(serializers.ModelSerializer):
     branding = serializers.SerializerMethodField()
     theme = serializers.SerializerMethodField()
     feature_flags = serializers.SerializerMethodField()
-    layout_preferences = serializers.SerializerMethodField()
-    landing_page_sections = serializers.SerializerMethodField()
     routes = serializers.SerializerMethodField()
+    page_config = serializers.SerializerMethodField()
     
     class Meta:
         model = Tenant
@@ -49,9 +48,8 @@ class TenantConfigSerializer(serializers.ModelSerializer):
             'branding',
             'theme',
             'feature_flags',
-            'layout_preferences',
-            'landing_page_sections',
             'routes',
+            'page_config',
             'created_at',
             'updated_at',
         ]
@@ -137,17 +135,6 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         """Extract feature flags from metadata."""
         return obj.metadata.get('feature_flags', {})
     
-    def get_layout_preferences(self, obj):
-        """Extract layout preferences from metadata."""
-        return obj.metadata.get('layout_preferences', {
-            'headerStyle': 'default',
-            'footerStyle': 'default',
-        })
-    
-    def get_landing_page_sections(self, obj):
-        """Extract landing page sections from metadata."""
-        return obj.metadata.get('landing_page_sections', [])
-    
     def get_routes(self, obj):
         """Extract dynamic routes configuration from metadata."""
         default_routes = [
@@ -178,6 +165,51 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         ]
         return obj.metadata.get('routes', default_routes)
     
+    def get_page_config(self, obj):
+        """
+        Extract page configuration from metadata.
+        
+        Returns page JSON configurations for dynamic routing system.
+        Falls back to default landing page if not configured.
+        """
+        page_config = obj.metadata.get('page_config', {})
+        
+        # Default page if none configured
+        default_pages = {
+            '/': {
+                'template': 'landing-page',
+                'slots': {
+                    'header': {
+                        'type': 'Navbar',
+                        'props': {
+                            'logo': '/logo.png',
+                            'links': []
+                        }
+                    },
+                    'main': {
+                        'type': 'Container',
+                        'props': {
+                            'children': [
+                                {
+                                    'type': 'Heading',
+                                    'props': {'level': 1, 'text': f'Welcome to {obj.name}'}
+                                }
+                            ]
+                        }
+                    },
+                    'footer': {
+                        'type': 'Footer',
+                        'props': {'copyright': f'© 2026 {obj.name}'}
+                    }
+                }
+            }
+        }
+        
+        return {
+            'pages': page_config.get('pages', default_pages),
+            'version': page_config.get('version', '1.0.0'),
+        }
+    
     def update(self, instance, validated_data):
         """
         Update tenant configuration.
@@ -203,14 +235,11 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         if 'feature_flags' in request_data:
             metadata['feature_flags'] = request_data['feature_flags']
         
-        if 'layout_preferences' in request_data:
-            metadata['layout_preferences'] = request_data['layout_preferences']
-        
-        if 'landing_page_sections' in request_data:
-            metadata['landing_page_sections'] = request_data['landing_page_sections']
-        
         if 'routes' in request_data:
             metadata['routes'] = request_data['routes']
+        
+        if 'page_config' in request_data:
+            metadata['page_config'] = request_data['page_config']
         
         instance.metadata = metadata
         instance.save()
