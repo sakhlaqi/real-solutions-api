@@ -9,12 +9,15 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from apps.authentication.permissions import IsTenantUser
-from .models import Tenant, Theme
+from .models import Tenant, Theme, TenantFeatureFlag, TenantPageConfig, TenantRoute
 from .serializers import (
     TenantSerializer, 
     TenantConfigSerializer,
     ThemeSerializer,
     ThemeListSerializer,
+    TenantFeatureFlagSerializer,
+    TenantRouteSerializer,
+    TenantPageConfigSerializer,
 )
 from datetime import datetime
 
@@ -354,3 +357,133 @@ class ThemeViewSet(viewsets.ModelViewSet):
         
         serializer = ThemeSerializer(new_theme)
         return Response(serializer.data, status=201)
+
+
+class TenantFeatureFlagViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for TenantFeatureFlag CRUD operations.
+    
+    GET    /tenants/{tenant_id}/feature-flags/        - List all feature flags
+    POST   /tenants/{tenant_id}/feature-flags/        - Create new feature flag
+    GET    /tenants/{tenant_id}/feature-flags/{id}/   - Get specific feature flag
+    PATCH  /tenants/{tenant_id}/feature-flags/{id}/   - Update feature flag
+    PUT    /tenants/{tenant_id}/feature-flags/{id}/   - Replace feature flag
+    DELETE /tenants/{tenant_id}/feature-flags/{id}/   - Delete feature flag
+    """
+    serializer_class = TenantFeatureFlagSerializer
+    permission_classes = [IsAuthenticated, IsTenantUser]
+    
+    def get_queryset(self):
+        """Filter feature flags by tenant from URL."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        return TenantFeatureFlag.objects.filter(tenant_id=tenant_id)
+    
+    def perform_create(self, serializer):
+        """Ensure tenant is set from URL."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        tenant = get_object_or_404(Tenant, pk=tenant_id)
+        
+        # Ensure user can only create for their own tenant
+        if str(self.request.tenant.id) != str(tenant_id):
+            raise serializers.ValidationError(
+                "You can only create feature flags for your own tenant"
+            )
+        
+        serializer.save(tenant=tenant)
+
+
+class TenantRouteViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for TenantRoute CRUD operations.
+    
+    GET    /tenants/{tenant_id}/routes/        - List all routes
+    POST   /tenants/{tenant_id}/routes/        - Create new route
+    GET    /tenants/{tenant_id}/routes/{id}/   - Get specific route
+    PATCH  /tenants/{tenant_id}/routes/{id}/   - Update route
+    PUT    /tenants/{tenant_id}/routes/{id}/   - Replace route
+    DELETE /tenants/{tenant_id}/routes/{id}/   - Delete route
+    """
+    serializer_class = TenantRouteSerializer
+    permission_classes = [IsAuthenticated, IsTenantUser]
+    
+    def get_queryset(self):
+        """Filter routes by tenant from URL."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        return TenantRoute.objects.filter(tenant_id=tenant_id).order_by('order', 'path')
+    
+    def perform_create(self, serializer):
+        """Ensure tenant is set from URL."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        tenant = get_object_or_404(Tenant, pk=tenant_id)
+        
+        # Ensure user can only create for their own tenant
+        if str(self.request.tenant.id) != str(tenant_id):
+            raise serializers.ValidationError(
+                "You can only create routes for your own tenant"
+            )
+        
+        serializer.save(tenant=tenant)
+
+
+class TenantPageConfigViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for TenantPageConfig CRUD operations.
+    
+    Note: This is a singleton resource per tenant (OneToOne relationship).
+    
+    GET    /tenants/{tenant_id}/page-config/   - Get page configuration
+    POST   /tenants/{tenant_id}/page-config/   - Create page configuration
+    PATCH  /tenants/{tenant_id}/page-config/   - Update page configuration
+    PUT    /tenants/{tenant_id}/page-config/   - Replace page configuration
+    DELETE /tenants/{tenant_id}/page-config/   - Delete page configuration
+    """
+    serializer_class = TenantPageConfigSerializer
+    permission_classes = [IsAuthenticated, IsTenantUser]
+    http_method_names = ['get', 'post', 'patch', 'put', 'delete']
+    
+    def get_queryset(self):
+        """Filter page config by tenant from URL."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        return TenantPageConfig.objects.filter(tenant_id=tenant_id)
+    
+    def get_object(self):
+        """Get or create the page config for this tenant."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        
+        # Ensure user can only access their own tenant
+        if str(self.request.tenant.id) != str(tenant_id):
+            raise serializers.ValidationError(
+                "You can only access your own tenant's page configuration"
+            )
+        
+        # For OneToOne, we want to get the single instance or 404
+        return get_object_or_404(TenantPageConfig, tenant_id=tenant_id)
+    
+    def list(self, request, *args, **kwargs):
+        """Return single object instead of list for OneToOne relationship."""
+        try:
+            instance = self.get_object()
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+        except:
+            # Return empty if doesn't exist
+            return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    def perform_create(self, serializer):
+        """Ensure tenant is set from URL and only one config per tenant."""
+        tenant_id = self.kwargs.get('tenant_pk')
+        tenant = get_object_or_404(Tenant, pk=tenant_id)
+        
+        # Ensure user can only create for their own tenant
+        if str(self.request.tenant.id) != str(tenant_id):
+            raise serializers.ValidationError(
+                "You can only create page configuration for your own tenant"
+            )
+        
+        # Check if config already exists
+        if TenantPageConfig.objects.filter(tenant=tenant).exists():
+            raise serializers.ValidationError(
+                "Page configuration already exists for this tenant. Use PATCH to update."
+            )
+        
+        serializer.save(tenant=tenant)

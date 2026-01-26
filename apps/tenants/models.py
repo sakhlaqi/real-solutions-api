@@ -495,3 +495,197 @@ class Theme(models.Model):
         return cls.objects.filter(
             models.Q(tenant=tenant) | models.Q(is_preset=True)
         ).order_by('-is_preset', 'name')
+
+
+class TenantFeatureFlag(models.Model):
+    """
+    Individual feature flag for a tenant.
+    
+    Each record represents one feature flag that can be toggled on/off.
+    """
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique feature flag identifier")
+    )
+    
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name='feature_flags',
+        help_text=_("Tenant this feature flag belongs to")
+    )
+    
+    key = models.CharField(
+        max_length=100,
+        help_text=_("Feature flag key (e.g., 'dark_mode', 'analytics')")
+    )
+    
+    enabled = models.BooleanField(
+        default=False,
+        help_text=_("Whether this feature is enabled")
+    )
+    
+    description = models.TextField(
+        blank=True,
+        help_text=_("Description of what this feature flag controls")
+    )
+    
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("Feature flag creation timestamp")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Last update timestamp")
+    )
+    
+    class Meta:
+        db_table = 'tenant_feature_flags'
+        verbose_name = _('Tenant Feature Flag')
+        verbose_name_plural = _('Tenant Feature Flags')
+        ordering = ['tenant', 'key']
+        unique_together = [['tenant', 'key']]
+        indexes = [
+            models.Index(fields=['tenant', 'key']),
+            models.Index(fields=['tenant', 'enabled']),
+        ]
+    
+    def __str__(self):
+        status = 'enabled' if self.enabled else 'disabled'
+        return f"{self.tenant.name}: {self.key} ({status})"
+
+
+class TenantPageConfig(models.Model):
+    """
+    Page configuration for a tenant.
+    
+    Stores page configurations for dynamic page rendering.
+    """
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique page config identifier")
+    )
+    
+    tenant = models.OneToOneField(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name='page_config_data',
+        help_text=_("Tenant this page config belongs to")
+    )
+    
+    pages = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("Page configurations keyed by page path")
+    )
+    
+    version = models.CharField(
+        max_length=20,
+        default='1.0.0',
+        help_text=_("Page config schema version")
+    )
+    
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("Page config creation timestamp")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Last update timestamp")
+    )
+    
+    class Meta:
+        db_table = 'tenant_page_configs'
+        verbose_name = _('Tenant Page Configuration')
+        verbose_name_plural = _('Tenant Page Configurations')
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Page Config for {self.tenant.name} (v{self.version})"
+
+
+class TenantRoute(models.Model):
+    """
+    Route configuration for a tenant.
+    
+    Stores individual route definitions for dynamic routing.
+    """
+    
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique route identifier")
+    )
+    
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name='routes_config',
+        help_text=_("Tenant this route belongs to")
+    )
+    
+    path = models.CharField(
+        max_length=255,
+        help_text=_("Route path (e.g., /login, /dashboard)")
+    )
+    
+    page_path = models.CharField(
+        max_length=255,
+        help_text=_("Page configuration path to render")
+    )
+    
+    title = models.CharField(
+        max_length=255,
+        help_text=_("Page title")
+    )
+    
+    exact = models.BooleanField(
+        default=True,
+        help_text=_("Whether the route path must match exactly")
+    )
+    
+    protected = models.BooleanField(
+        default=False,
+        help_text=_("Whether the route requires authentication")
+    )
+    
+    layout = models.CharField(
+        max_length=50,
+        default='main',
+        help_text=_("Layout to use for this route")
+    )
+    
+    order = models.IntegerField(
+        default=0,
+        help_text=_("Display order for navigation")
+    )
+    
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("Route creation timestamp")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Last update timestamp")
+    )
+    
+    class Meta:
+        db_table = 'tenant_routes'
+        verbose_name = _('Tenant Route')
+        verbose_name_plural = _('Tenant Routes')
+        ordering = ['tenant', 'order', 'path']
+        unique_together = [['tenant', 'path']]
+        indexes = [
+            models.Index(fields=['tenant', 'path']),
+            models.Index(fields=['tenant', 'order']),
+        ]
+    
+    def __str__(self):
+        return f"{self.tenant.name}: {self.path} → {self.page_path}"

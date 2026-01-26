@@ -4,7 +4,7 @@ Serializers for tenant models.
 
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import Tenant, Theme
+from .models import Tenant, Theme, TenantFeatureFlag, TenantPageConfig, TenantRoute
 
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -132,11 +132,39 @@ class TenantConfigSerializer(serializers.ModelSerializer):
         return obj.metadata.get('theme', default_theme)
     
     def get_feature_flags(self, obj):
-        """Extract feature flags from metadata."""
+        """
+        Extract feature flags from dedicated table or fall back to metadata.
+        Returns a dict of {key: enabled} for easy frontend consumption.
+        """
+        # Try new table first
+        flags_queryset = obj.feature_flags.all()
+        if flags_queryset.exists():
+            return {flag.key: flag.enabled for flag in flags_queryset}
+        
+        # Fall back to metadata for backward compatibility
         return obj.metadata.get('feature_flags', {})
     
     def get_routes(self, obj):
-        """Extract dynamic routes configuration from metadata."""
+        """
+        Extract dynamic routes from dedicated table or fall back to metadata.
+        """
+        # Try new table first
+        routes_queryset = obj.routes_config.all()
+        if routes_queryset.exists():
+            return [
+                {
+                    'path': route.path,
+                    'pagePath': route.page_path,
+                    'title': route.title,
+                    'exact': route.exact,
+                    'protected': route.protected,
+                    'layout': route.layout,
+                    'order': route.order,
+                }
+                for route in routes_queryset
+            ]
+        
+        # Fall back to metadata for backward compatibility
         default_routes = [
             {
                 'path': '/',
@@ -167,23 +195,30 @@ class TenantConfigSerializer(serializers.ModelSerializer):
     
     def get_page_config(self, obj):
         """
-        Extract page configuration from metadata.
+        Extract page configuration from dedicated table or fall back to metadata.
         
         Returns page JSON configurations for dynamic routing system.
         Falls back to default landing page if not configured.
         """
+        # Try new table first
+        if hasattr(obj, 'page_config_data'):
+            return {
+                'pages': obj.page_config_data.pages,
+                'version': obj.page_config_data.version,
+            }
+        
+        # Fall back to metadata for backward compatibility
         page_config = obj.metadata.get('page_config', {})
         
         # Default page if none configured
         default_pages = {
             '/': {
-                'template': 'landing-page',
+                'template': 'DashboardLayout',
                 'slots': {
                     'header': {
-                        'type': 'Navbar',
+                        'type': 'HeaderComposite',
                         'props': {
-                            'logo': '/logo.png',
-                            'links': []
+                            'title': f'Welcome to {obj.name}'
                         }
                     },
                     'main': {
@@ -192,14 +227,10 @@ class TenantConfigSerializer(serializers.ModelSerializer):
                             'children': [
                                 {
                                     'type': 'Heading',
-                                    'props': {'level': 1, 'text': f'Welcome to {obj.name}'}
+                                    'props': {'level': 1, 'children': f'Welcome to {obj.name}'}
                                 }
                             ]
                         }
-                    },
-                    'footer': {
-                        'type': 'Footer',
-                        'props': {'copyright': f'© 2026 {obj.name}'}
                     }
                 }
             }
@@ -409,4 +440,133 @@ class ThemeListSerializer(serializers.ModelSerializer):
     
     def get_tags(self, obj):
         return obj.theme_json.get('meta', {}).get('tags', [])
+
+
+class TenantFeatureFlagSerializer(serializers.ModelSerializer):
+    """
+    Serializer for TenantFeatureFlag CRUD operations.
+    """
+    
+    class Meta:
+        model = TenantFeatureFlag
+        fields = [
+            'id',
+            'tenant',
+            'key',
+            'enabled',
+            'description',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def validate(self, attrs):
+        """Validate that key doesn't already exist for this tenant."""
+        tenant = attrs.get('tenant')
+        key = attrs.get('key')
+        
+        # For updates, exclude current instance
+        if self.instance:
+            existing = TenantFeatureFlag.objects.filter(
+                tenant=tenant, key=key
+            ).exclude(id=self.instance.id)
+        else:
+            existing = TenantFeatureFlag.objects.filter(tenant=tenant, key=key)
+        
+        if existing.exists():
+            raise serializers.ValidationError(
+                f"Feature flag '{key}' already exists for this tenant"
+            )
+        
+        return attrs
+
+
+class TenantRouteSerializer(serializers.ModelSerializer):
+    """
+    Serializer for TenantRoute CRUD operations.
+    """
+    
+    class Meta:
+        model = TenantRoute
+        fields = [
+            'id',
+            'tenant',
+            'path',
+            'page_path',
+            'title',
+            'exact',
+            'protected',
+            'layout',
+            'order',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def validate(self, attrs):
+        """Validate that path doesn't already exist for this tenant."""
+        tenant = attrs.get('tenant')
+        path = attrs.get('path')
+        
+        # For updates, exclude current instance
+        if self.instance:
+            existing = TenantRoute.objects.filter(
+                tenant=tenant, path=path
+            ).exclude(id=self.instance.id)
+        else:
+            existing = TenantRoute.objects.filter(tenant=tenant, path=path)
+        
+        if existing.exists():
+            raise serializers.ValidationError(
+                f"Route '{path}' already exists for this tenant"
+            )
+        
+        return attrs
+
+
+class TenantPageConfigSerializer(serializers.ModelSerializer):
+    """
+    Serializer for TenantPageConfig CRUD operations.
+    """
+    
+    page_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = TenantPageConfig
+        fields = [
+            'id',
+            'tenant',
+            'pages',
+            'version',
+            'page_count',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'page_count']
+    
+    def get_page_count(self, obj):
+        """Get number of pages configured."""
+        return len(obj.pages) if obj.pages else 0
+    
+    def validate_pages(self, value):
+        """Validate pages structure."""
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Pages must be a dictionary")
+        
+        # Optionally validate each page structure
+        for page_path, page_config in value.items():
+            if not isinstance(page_config, dict):
+                raise serializers.ValidationError(
+                    f"Page config for '{page_path}' must be a dictionary"
+                )
+            if 'template' not in page_config:
+                raise serializers.ValidationError(
+                    f"Page config for '{page_path}' must include 'template'"
+                )
+            if 'slots' not in page_config:
+                raise serializers.ValidationError(
+                    f"Page config for '{page_path}' must include 'slots'"
+                )
+        
+        return value
 
