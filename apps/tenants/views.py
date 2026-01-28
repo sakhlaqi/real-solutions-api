@@ -9,15 +9,16 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from apps.authentication.permissions import IsTenantUser
-from .models import Tenant, Theme, TenantFeatureFlag, TenantPageConfig, TenantRoute
+from .models import Tenant, Theme, Template, TenantFeatureFlag, TenantRoute
 from .serializers import (
     TenantSerializer, 
     TenantConfigSerializer,
     ThemeSerializer,
     ThemeListSerializer,
+    TemplateSerializer,
+    TemplateListSerializer,
     TenantFeatureFlagSerializer,
     TenantRouteSerializer,
-    TenantPageConfigSerializer,
 )
 from datetime import datetime
 
@@ -359,6 +360,245 @@ class ThemeViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=201)
 
 
+class TemplateViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Template model.
+    
+    Public endpoints (no authentication required):
+    - GET /templates/ - List all preset templates (lightweight)
+    - GET /templates/{id}/ - Get full template by ID (including template_json)
+    
+    Authenticated endpoints (require tenant authentication):
+    - POST /templates/ - Create custom template
+    - PUT /templates/{id}/ - Update custom template
+    - PATCH /templates/{id}/ - Partially update custom template
+    - DELETE /templates/{id}/ - Delete custom template
+    
+    Presets are always available to all tenants.
+    Custom templates are only visible to their owning tenant.
+    Custom templates can extend presets using base_preset and template_overrides.
+    """
+    
+    def get_permissions(self):
+        """
+        List and retrieve are public.
+        Create, update, delete require authentication.
+        """
+        if self.action in ['list', 'retrieve', 'presets', 'by_category', 'by_tier']:
+            return [AllowAny()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        """
+        Return presets for unauthenticated users.
+        Return presets + tenant's custom templates for authenticated users.
+        """
+        # Get all presets (always visible)
+        queryset = Template.objects.filter(is_preset=True)
+        
+        # Add tenant's custom templates if authenticated
+        if self.request.user.is_authenticated and hasattr(self.request, 'tenant'):
+            tenant_templates = Template.objects.filter(tenant=self.request.tenant)
+            queryset = queryset | tenant_templates
+        
+        return queryset.order_by('-is_preset', 'category', 'name')
+    
+    def get_serializer_class(self):
+        """
+        Use lightweight serializer for list, full serializer for detail.
+        """
+        if self.action == 'list':
+            return TemplateListSerializer
+        return TemplateSerializer
+    
+    def perform_create(self, serializer):
+        """
+        Create custom template for current tenant.
+        Auto-set tenant and created_by from request.
+        """
+        # Prevent creating presets via API
+        if serializer.validated_data.get('is_preset', False):
+            raise serializers.ValidationError(
+                "Cannot create preset templates via API. Use management command."
+            )
+        
+        # Set tenant from request
+        if not hasattr(self.request, 'tenant'):
+            raise serializers.ValidationError("Tenant context required")
+        
+        serializer.save(
+            tenant=self.request.tenant,
+            created_by=self.request.user
+        )
+    
+    def perform_update(self, serializer):
+        """
+        Update custom template.
+        Prevent updating presets and changing ownership.
+        """
+        instance = self.get_object()
+        
+        if instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot update preset templates. Preset templates are read-only."
+            )
+        
+        # Prevent changing tenant
+        if 'tenant' in serializer.validated_data:
+            if serializer.validated_data['tenant'] != instance.tenant:
+                raise serializers.ValidationError("Cannot change template tenant")
+        
+        serializer.save()
+    
+    def perform_destroy(self, instance):
+        """
+        Delete custom template.
+        Prevent deleting presets.
+        """
+        if instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot delete preset templates."
+            )
+        
+        # Check if any tenant is using this template
+        if instance.tenants_using_template.exists():
+            raise serializers.ValidationError(
+                f"Cannot delete template. {instance.tenants_using_template.count()} tenant(s) are using it."
+            )
+        
+        instance.delete()
+    
+    @action(detail=False, methods=['get'])
+    def presets(self, request):
+        """
+        GET /templates/presets/
+        
+        Get all preset templates (lightweight list).
+        """
+        presets = Template.get_presets()
+        serializer = TemplateListSerializer(presets, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def by_category(self, request):
+        """
+        GET /templates/by_category/?category=landing
+        
+        Get templates filtered by category.
+        """
+        category = request.query_params.get('category')
+        if not category:
+            raise serializers.ValidationError("category parameter is required")
+        
+        tenant = getattr(request, 'tenant', None)
+        templates = Template.get_by_category(category, tenant)
+        serializer = TemplateListSerializer(templates, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def by_tier(self, request):
+        """
+        GET /templates/by_tier/?tier=free
+        
+        Get templates filtered by tier.
+        Note: Phase 1 - No entitlement checking yet.
+        """
+        tier = request.query_params.get('tier')
+        if not tier:
+            raise serializers.ValidationError("tier parameter is required")
+        
+        tenant = getattr(request, 'tenant', None)
+        templates = Template.get_by_tier(tier, tenant)
+        serializer = TemplateListSerializer(templates, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        """
+        POST /templates/{id}/clone/
+        
+        Clone a template to create a new custom template.
+        """
+        source_template = self.get_object()
+        
+        name = request.data.get('name')
+        version = request.data.get('version', '1.0.0')
+        template_overrides = request.data.get('template_overrides', {})
+        
+        if not name:
+            raise serializers.ValidationError("Name is required")
+        
+        # Check if tenant already has a template with this name
+        if Template.objects.filter(
+            tenant=self.request.tenant,
+            name=name
+        ).exists():
+            raise serializers.ValidationError(
+                f"Template '{name}' already exists for this tenant"
+            )
+        
+        if source_template.is_preset:
+            # Clone from preset - use inheritance
+            new_template = Template.objects.create(
+                name=name,
+                version=version,
+                is_preset=False,
+                category=source_template.category,
+                tier=source_template.tier,
+                description=f"Based on {source_template.name}",
+                tenant=self.request.tenant,
+                created_by=self.request.user,
+                base_preset=source_template,
+                template_overrides=template_overrides,
+                template_json={
+                    'meta': {
+                        'id': name.lower().replace(' ', '-'),
+                        'name': name,
+                        'version': version,
+                        'category': source_template.category,
+                        'tier': source_template.tier,
+                        'description': f"Based on {source_template.name}"
+                    }
+                }
+            )
+        else:
+            # Clone from custom template - create standalone copy
+            from .utils import deep_merge_json
+            
+            source_resolved = source_template.get_resolved_template_json()
+            merged_pages = deep_merge_json(
+                source_resolved.get('pages', {}),
+                template_overrides.get('pages', {})
+            )
+            
+            new_template = Template.objects.create(
+                name=name,
+                version=version,
+                is_preset=False,
+                category=source_template.category,
+                tier=source_template.tier,
+                description=f"Based on {source_template.name}",
+                tenant=self.request.tenant,
+                created_by=self.request.user,
+                template_json={
+                    'meta': {
+                        'id': name.lower().replace(' ', '-'),
+                        'name': name,
+                        'version': version,
+                        'category': source_template.category,
+                        'tier': source_template.tier,
+                        'description': f"Based on {source_template.name}"
+                    },
+                    'pages': merged_pages,
+                    'theme_preset_id': source_resolved.get('theme_preset_id'),
+                    'metadata': source_resolved.get('metadata', {})
+                }
+            )
+        
+        serializer = TemplateSerializer(new_template)
+        return Response(serializer.data, status=201)
+
+
 class TenantFeatureFlagViewSet(viewsets.ModelViewSet):
     """
     ViewSet for TenantFeatureFlag CRUD operations.
@@ -425,65 +665,6 @@ class TenantRouteViewSet(viewsets.ModelViewSet):
         serializer.save(tenant=tenant)
 
 
-class TenantPageConfigViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for TenantPageConfig CRUD operations.
-    
-    Note: This is a singleton resource per tenant (OneToOne relationship).
-    
-    GET    /tenants/{tenant_id}/page-config/   - Get page configuration
-    POST   /tenants/{tenant_id}/page-config/   - Create page configuration
-    PATCH  /tenants/{tenant_id}/page-config/   - Update page configuration
-    PUT    /tenants/{tenant_id}/page-config/   - Replace page configuration
-    DELETE /tenants/{tenant_id}/page-config/   - Delete page configuration
-    """
-    serializer_class = TenantPageConfigSerializer
-    permission_classes = [IsAuthenticated, IsTenantUser]
-    http_method_names = ['get', 'post', 'patch', 'put', 'delete']
-    
-    def get_queryset(self):
-        """Filter page config by tenant from URL."""
-        tenant_id = self.kwargs.get('tenant_pk')
-        return TenantPageConfig.objects.filter(tenant_id=tenant_id)
-    
-    def get_object(self):
-        """Get or create the page config for this tenant."""
-        tenant_id = self.kwargs.get('tenant_pk')
-        
-        # Ensure user can only access their own tenant
-        if str(self.request.tenant.id) != str(tenant_id):
-            raise serializers.ValidationError(
-                "You can only access your own tenant's page configuration"
-            )
-        
-        # For OneToOne, we want to get the single instance or 404
-        return get_object_or_404(TenantPageConfig, tenant_id=tenant_id)
-    
-    def list(self, request, *args, **kwargs):
-        """Return single object instead of list for OneToOne relationship."""
-        try:
-            instance = self.get_object()
-            serializer = self.get_serializer(instance)
-            return Response(serializer.data)
-        except:
-            # Return empty if doesn't exist
-            return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    def perform_create(self, serializer):
-        """Ensure tenant is set from URL and only one config per tenant."""
-        tenant_id = self.kwargs.get('tenant_pk')
-        tenant = get_object_or_404(Tenant, pk=tenant_id)
-        
-        # Ensure user can only create for their own tenant
-        if str(self.request.tenant.id) != str(tenant_id):
-            raise serializers.ValidationError(
-                "You can only create page configuration for your own tenant"
-            )
-        
-        # Check if config already exists
-        if TenantPageConfig.objects.filter(tenant=tenant).exists():
-            raise serializers.ValidationError(
-                "Page configuration already exists for this tenant. Use PATCH to update."
-            )
-        
-        serializer.save(tenant=tenant)
+
+# TenantPageConfigViewSet removed - replaced by Template system
+

@@ -273,3 +273,156 @@ def get_validation_summary(theme_json: Dict[str, Any]) -> str:
     except ValidationError as e:
         errors = e.messages if hasattr(e, 'messages') else [str(e)]
         return f"✗ Theme JSON validation failed:\n" + "\n".join(f"  - {err}" for err in errors)
+
+
+# ============================================================================
+# Template Validators
+# ============================================================================
+
+def validate_template_json(template_json: Dict[str, Any]) -> None:
+    """
+    Validate template JSON structure.
+    
+    Validates against the TemplatePreset schema.
+    Raises ValidationError if validation fails.
+    
+    Args:
+        template_json: Template data to validate
+        
+    Raises:
+        ValidationError: If template_json is invalid
+    """
+    errors = []
+    
+    # Check top-level structure
+    if not isinstance(template_json, dict):
+        raise ValidationError("template_json must be a dictionary")
+    
+    # Validate meta
+    errors.extend(_validate_template_meta(template_json.get('meta')))
+    
+    # Validate pages
+    errors.extend(_validate_template_pages(template_json.get('pages')))
+    
+    if errors:
+        raise ValidationError(errors)
+
+
+def _validate_template_meta(meta: Any) -> List[str]:
+    """Validate template meta."""
+    errors = []
+    
+    if not isinstance(meta, dict):
+        return ["template_json.meta must be a dictionary"]
+    
+    # Required fields
+    required_fields = ['id', 'name', 'version', 'category', 'tier']
+    for field in required_fields:
+        if field not in meta:
+            errors.append(f"template_json.meta.{field} is required")
+    
+    # Validate version format (semver)
+    if 'version' in meta:
+        version = meta['version']
+        if not isinstance(version, str):
+            errors.append("template_json.meta.version must be a string")
+        elif not all(part.isdigit() for part in version.split('.') if part):
+            errors.append("template_json.meta.version must be in semver format (e.g., '1.0.0')")
+    
+    # Validate category
+    valid_categories = [
+        'landing', 'marketing', 'blog', 'dashboard', 'auth',
+        'ecommerce', 'portfolio', 'docs', 'custom'
+    ]
+    if 'category' in meta and meta['category'] not in valid_categories:
+        errors.append(f"template_json.meta.category must be one of {valid_categories}")
+    
+    # Validate tier
+    valid_tiers = ['free', 'premium', 'enterprise', 'custom']
+    if 'tier' in meta and meta['tier'] not in valid_tiers:
+        errors.append(f"template_json.meta.tier must be one of {valid_tiers}")
+    
+    return errors
+
+
+def _validate_template_pages(pages: Any) -> List[str]:
+    """Validate template pages."""
+    errors = []
+    
+    if not isinstance(pages, dict):
+        return ["template_json.pages must be a dictionary"]
+    
+    if not pages:
+        errors.append("template_json.pages cannot be empty (at least one page required)")
+    
+    # Validate each page
+    for page_key, page_def in pages.items():
+        errors.extend(_validate_page_definition(page_key, page_def))
+    
+    return errors
+
+
+def _validate_page_definition(page_key: str, page_def: Any) -> List[str]:
+    """Validate a single page definition."""
+    errors = []
+    
+    if not isinstance(page_def, dict):
+        errors.append(f"template_json.pages.{page_key} must be a dictionary")
+        return errors
+    
+    # Required fields
+    required_fields = ['id', 'title', 'layout', 'sections']
+    for field in required_fields:
+        if field not in page_def:
+            errors.append(f"template_json.pages.{page_key}.{field} is required")
+    
+    # Validate layout
+    if 'layout' in page_def:
+        layout = page_def['layout']
+        if not isinstance(layout, dict):
+            errors.append(f"template_json.pages.{page_key}.layout must be a dictionary")
+        elif 'type' not in layout:
+            errors.append(f"template_json.pages.{page_key}.layout.type is required")
+    
+    # Validate sections
+    if 'sections' in page_def:
+        sections = page_def['sections']
+        if not isinstance(sections, list):
+            errors.append(f"template_json.pages.{page_key}.sections must be an array")
+        else:
+            for i, section in enumerate(sections):
+                errors.extend(_validate_section_reference(page_key, i, section))
+    
+    return errors
+
+
+def _validate_section_reference(page_key: str, index: int, section: Any) -> List[str]:
+    """Validate a section reference."""
+    errors = []
+    
+    if not isinstance(section, dict):
+        errors.append(f"template_json.pages.{page_key}.sections[{index}] must be a dictionary")
+        return errors
+    
+    # Required fields
+    required_fields = ['id', 'type']
+    for field in required_fields:
+        if field not in section:
+            errors.append(f"template_json.pages.{page_key}.sections[{index}].{field} is required")
+    
+    return errors
+
+
+def get_template_validation_summary(template_json: Dict[str, Any]) -> str:
+    """
+    Get a human-readable template validation summary.
+    
+    Returns:
+        Summary string with validation results
+    """
+    try:
+        validate_template_json(template_json)
+        return "✓ Template JSON is valid"
+    except ValidationError as e:
+        errors = e.messages if hasattr(e, 'messages') else [str(e)]
+        return f"✗ Template JSON validation failed:\n" + "\n".join(f"  - {err}" for err in errors)

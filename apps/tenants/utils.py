@@ -48,6 +48,10 @@ def deep_merge_tokens(base, overrides):
     return result
 
 
+# Alias for template JSON merging (same logic)
+deep_merge_json = deep_merge_tokens
+
+
 def calculate_token_diff(base, modified):
     """
     Calculate the difference between base and modified tokens.

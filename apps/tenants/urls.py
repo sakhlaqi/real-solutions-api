@@ -11,9 +11,9 @@ from .views import (
     TenantConfigView,
     TenantConfigBySlugView,
     ThemeViewSet,
+    TemplateViewSet,
     TenantFeatureFlagViewSet,
     TenantRouteViewSet,
-    TenantPageConfigViewSet,
 )
 
 app_name = 'tenants'
@@ -22,12 +22,12 @@ app_name = 'tenants'
 router = DefaultRouter()
 router.register(r'tenants', TenantViewSet, basename='tenant')
 router.register(r'themes', ThemeViewSet, basename='theme')
+router.register(r'templates', TemplateViewSet, basename='template')
 
 # Nested routers for tenant-specific resources
 tenants_router = routers.NestedDefaultRouter(router, r'tenants', lookup='tenant')
 tenants_router.register(r'feature-flags', TenantFeatureFlagViewSet, basename='tenant-feature-flags')
 tenants_router.register(r'routes', TenantRouteViewSet, basename='tenant-routes')
-tenants_router.register(r'page-config', TenantPageConfigViewSet, basename='tenant-page-config')
 
 urlpatterns = [
     # Public endpoints (no auth required)

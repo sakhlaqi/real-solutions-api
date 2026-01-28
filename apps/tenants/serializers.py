@@ -4,7 +4,7 @@ Serializers for tenant models.
 
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import Tenant, Theme, TenantFeatureFlag, TenantPageConfig, TenantRoute
+from .models import Tenant, Theme, Template, TenantFeatureFlag, TenantRoute
 
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -195,50 +195,56 @@ class TenantConfigSerializer(serializers.ModelSerializer):
     
     def get_page_config(self, obj):
         """
-        Extract page configuration from dedicated table or fall back to metadata.
+        Get page configuration from template system.
         
-        Returns page JSON configurations for dynamic routing system.
-        Falls back to default landing page if not configured.
+        Returns resolved template JSON (preset + overrides merged).
+        If no template assigned, returns a minimal default page.
         """
-        # Try new table first
-        if hasattr(obj, 'page_config_data'):
+        # Get pages from template system
+        if obj.template:
+            resolved_template = obj.template.get_resolved_template_json()
             return {
-                'pages': obj.page_config_data.pages,
-                'version': obj.page_config_data.version,
+                'pages': resolved_template.get('pages', {}),
+                'version': resolved_template.get('meta', {}).get('version', '1.0.0'),
+                'template_id': str(obj.template.id),
+                'template_name': obj.template.name,
+                'template_category': obj.template.category,
             }
         
-        # Fall back to metadata for backward compatibility
-        page_config = obj.metadata.get('page_config', {})
-        
-        # Default page if none configured
+        # Default minimal page if no template assigned
         default_pages = {
-            '/': {
-                'template': 'DashboardLayout',
-                'slots': {
-                    'header': {
-                        'type': 'HeaderComposite',
+            'home': {
+                'id': 'home',
+                'title': 'Home',
+                'description': f'Welcome to {obj.name}',
+                'layout': {
+                    'type': 'default-layout',
+                    'version': '1.0.0',
+                },
+                'sections': [
+                    {
+                        'id': 'welcome',
+                        'type': 'hero-simple',
+                        'version': '1.0.0',
                         'props': {
-                            'title': f'Welcome to {obj.name}'
-                        }
-                    },
-                    'main': {
-                        'type': 'Container',
-                        'props': {
-                            'children': [
-                                {
-                                    'type': 'Heading',
-                                    'props': {'level': 1, 'children': f'Welcome to {obj.name}'}
-                                }
-                            ]
+                            'heading': f'Welcome to {obj.name}',
+                            'subheading': 'Get started by assigning a template to this tenant',
+                            'alignment': 'center',
                         }
                     }
+                ],
+                'metadata': {
+                    'metaTitle': f'{obj.name} - Home',
+                    'metaDescription': f'Welcome to {obj.name}',
                 }
             }
         }
         
         return {
-            'pages': page_config.get('pages', default_pages),
-            'version': page_config.get('version', '1.0.0'),
+            'pages': default_pages,
+            'version': '1.0.0',
+            'template_id': None,
+            'template_name': None,
         }
     
     def update(self, instance, validated_data):
@@ -442,6 +448,149 @@ class ThemeListSerializer(serializers.ModelSerializer):
         return obj.theme_json.get('meta', {}).get('tags', [])
 
 
+# ============================================================================
+# Template Serializers
+# ============================================================================
+
+class TemplateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Template model with read-only protection for presets.
+    Supports template inheritance - custom templates can extend presets.
+    """
+    
+    # Read-only fields
+    is_read_only = serializers.SerializerMethodField()
+    resolved_template_json = serializers.SerializerMethodField()
+    inheritance_info = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Template
+        fields = [
+            'id',
+            'name',
+            'version',
+            'is_preset',
+            'is_read_only',
+            'category',
+            'tier',
+            'description',
+            'preview_image',
+            'tags',
+            'template_json',
+            'base_preset',
+            'template_overrides',
+            'resolved_template_json',
+            'inheritance_info',
+            'tenant',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'is_read_only',
+            'resolved_template_json',
+            'inheritance_info',
+        ]
+    
+    def get_is_read_only(self, obj):
+        """Presets are read-only."""
+        return obj.is_read_only()
+    
+    def get_resolved_template_json(self, obj):
+        """Get complete template JSON (merged if inherited)."""
+        return obj.get_resolved_template_json()
+    
+    def get_inheritance_info(self, obj):
+        """Get inheritance information."""
+        return obj.get_inheritance_info()
+    
+    def validate(self, attrs):
+        """Validate template data before save."""
+        # Prevent modification of presets
+        if self.instance and self.instance.is_preset:
+            raise serializers.ValidationError(
+                "Cannot modify preset templates. Preset templates are read-only."
+            )
+        
+        # Ensure name, version, category, tier match template_json meta
+        template_json = attrs.get('template_json', self.instance.template_json if self.instance else None)
+        if template_json and 'meta' in template_json:
+            meta = template_json['meta']
+            
+            name = attrs.get('name', self.instance.name if self.instance else None)
+            if name and meta.get('name') != name:
+                raise serializers.ValidationError({
+                    'template_json': f"template_json.meta.name must match template name: '{name}'"
+                })
+            
+            version = attrs.get('version', self.instance.version if self.instance else '1.0.0')
+            if meta.get('version') != version:
+                raise serializers.ValidationError({
+                    'template_json': f"template_json.meta.version must match template version: '{version}'"
+                })
+            
+            category = attrs.get('category', self.instance.category if self.instance else 'custom')
+            if meta.get('category') != category:
+                raise serializers.ValidationError({
+                    'template_json': f"template_json.meta.category must match template category: '{category}'"
+                })
+            
+            tier = attrs.get('tier', self.instance.tier if self.instance else 'free')
+            if meta.get('tier') != tier:
+                raise serializers.ValidationError({
+                    'template_json': f"template_json.meta.tier must match template tier: '{tier}'"
+                })
+        
+        return attrs
+    
+    def create(self, validated_data):
+        """Create new template (not allowed for presets)."""
+        if validated_data.get('is_preset', False):
+            raise serializers.ValidationError(
+                "Cannot create preset templates via API. Use management commands."
+            )
+        return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """Update template (not allowed for presets or changing preset flag)."""
+        # Prevent changing is_preset flag
+        if 'is_preset' in validated_data and validated_data['is_preset'] != instance.is_preset:
+            raise serializers.ValidationError("Cannot change is_preset flag")
+        
+        return super().update(instance, validated_data)
+
+
+class TemplateListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for listing templates (without full template_json).
+    """
+    
+    is_read_only = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Template
+        fields = [
+            'id',
+            'name',
+            'version',
+            'is_preset',
+            'is_read_only',
+            'category',
+            'tier',
+            'description',
+            'preview_image',
+            'tags',
+            'created_at',
+            'updated_at',
+        ]
+    
+    def get_is_read_only(self, obj):
+        return obj.is_read_only()
+
+
 class TenantFeatureFlagSerializer(serializers.ModelSerializer):
     """
     Serializer for TenantFeatureFlag CRUD operations.
@@ -524,49 +673,7 @@ class TenantRouteSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class TenantPageConfigSerializer(serializers.ModelSerializer):
-    """
-    Serializer for TenantPageConfig CRUD operations.
-    """
-    
-    page_count = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = TenantPageConfig
-        fields = [
-            'id',
-            'tenant',
-            'pages',
-            'version',
-            'page_count',
-            'created_at',
-            'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'page_count']
-    
-    def get_page_count(self, obj):
-        """Get number of pages configured."""
-        return len(obj.pages) if obj.pages else 0
-    
-    def validate_pages(self, value):
-        """Validate pages structure."""
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Pages must be a dictionary")
-        
-        # Optionally validate each page structure
-        for page_path, page_config in value.items():
-            if not isinstance(page_config, dict):
-                raise serializers.ValidationError(
-                    f"Page config for '{page_path}' must be a dictionary"
-                )
-            if 'template' not in page_config:
-                raise serializers.ValidationError(
-                    f"Page config for '{page_path}' must include 'template'"
-                )
-            if 'slots' not in page_config:
-                raise serializers.ValidationError(
-                    f"Page config for '{page_path}' must include 'slots'"
-                )
-        
-        return value
+
+# TenantPageConfigSerializer removed - replaced by Template system
+
 

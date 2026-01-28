@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 import uuid
 import json
 
-from .validators import validate_theme_json
+from .validators import validate_theme_json, validate_template_json
 
 User = get_user_model()
 
@@ -63,6 +63,16 @@ class Tenant(models.Model):
         default=list,
         blank=True,
         help_text=_("Enabled theme modes (e.g., ['dark', 'compact'])")
+    )
+    
+    # Template selection
+    template = models.ForeignKey(
+        'Template',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tenants_using_template',
+        help_text=_("Selected template for this tenant")
     )
     
     # Timestamps
@@ -497,6 +507,374 @@ class Theme(models.Model):
         ).order_by('-is_preset', 'name')
 
 
+class Template(models.Model):
+    """
+    Template model - stores template presets and custom templates.
+    
+    Templates can be:
+    1. Global presets (is_preset=True, tenant=None) - read-only, official templates
+    2. Tenant-specific custom templates (is_preset=False, tenant=Tenant)
+    
+    Template data is stored as JSON conforming to the template schema.
+    Templates behave exactly like Themes - presets, overrides, runtime resolution.
+    """
+    
+    # Unique identifier
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text=_("Unique template identifier")
+    )
+    
+    # Template name
+    name = models.CharField(
+        max_length=255,
+        help_text=_("Template name")
+    )
+    
+    # Template version (semver format)
+    version = models.CharField(
+        max_length=20,
+        default='1.0.0',
+        help_text=_("Template version (semantic versioning)")
+    )
+    
+    # Preset flag - true for official templates
+    is_preset = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=_("Whether this is an official preset template")
+    )
+    
+    # Business category
+    category = models.CharField(
+        max_length=50,
+        default='custom',
+        db_index=True,
+        help_text=_("Template category (landing, marketing, blog, etc.)")
+    )
+    
+    # Template tier (classification only - NOT coupled to billing)
+    tier = models.CharField(
+        max_length=20,
+        default='free',
+        db_index=True,
+        help_text=_("Template tier: free, premium, enterprise, custom")
+    )
+    
+    # Template JSON data - conforms to TemplatePreset schema
+    template_json = models.JSONField(
+        help_text=_("Complete template definition in JSON format")
+    )
+    
+    # Optional: Tenant owner (null for global presets)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='templates',
+        help_text=_("Tenant that owns this template (null for presets)")
+    )
+    
+    # Creator (null for system-seeded presets)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_templates',
+        help_text=_("User who created this template")
+    )
+    
+    # Template inheritance - for custom templates based on presets
+    base_preset = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='derived_templates',
+        help_text=_("Base preset this template extends (null for standalone templates)")
+    )
+    
+    # Template overrides - only changed fields (merged with base at runtime)
+    template_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("Template overrides to apply over base preset (empty for standalone templates)")
+    )
+    
+    # Preview image URL
+    preview_image = models.CharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text=_("Preview/thumbnail image URL")
+    )
+    
+    # Tags for search/filtering
+    tags = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=_("Template tags for search and filtering")
+    )
+    
+    # Description
+    description = models.TextField(
+        blank=True,
+        help_text=_("Template description")
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=_("Template creation timestamp")
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Last update timestamp")
+    )
+    
+    class Meta:
+        db_table = 'templates'
+        verbose_name = _('Template')
+        verbose_name_plural = _('Templates')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['is_preset']),
+            models.Index(fields=['tenant']),
+            models.Index(fields=['name']),
+            models.Index(fields=['category']),
+            models.Index(fields=['tier']),
+        ]
+        constraints = [
+            # Presets must not have a tenant
+            models.CheckConstraint(
+                check=(
+                    models.Q(is_preset=True, tenant__isnull=True) |
+                    models.Q(is_preset=False)
+                ),
+                name='preset_templates_no_tenant'
+            ),
+            # Unique name per tenant (presets share global namespace)
+            models.UniqueConstraint(
+                fields=['name', 'tenant'],
+                name='unique_template_name_per_tenant'
+            ),
+        ]
+    
+    def __str__(self):
+        preset_label = " [PRESET]" if self.is_preset else ""
+        tenant_label = f" ({self.tenant.slug})" if self.tenant else ""
+        return f"{self.name} v{self.version}{preset_label}{tenant_label}"
+    
+    def __repr__(self):
+        return f"<Template: {self.name} v{self.version} (preset={self.is_preset}, category={self.category})>"
+    
+    def clean(self):
+        """Validate template data before saving."""
+        super().clean()
+        
+        # Validate template_json structure (only for standalone templates)
+        if not self.base_preset:
+            # Standalone template - must have complete template_json
+            if not self.template_json:
+                raise ValidationError("template_json cannot be empty for standalone templates")
+            
+            # Use comprehensive validator
+            try:
+                validate_template_json(self.template_json)
+            except ValidationError as e:
+                # Re-raise with more context
+                raise ValidationError(f"Invalid template_json: {e}")
+            
+            # Ensure required fields exist in template_json
+            meta = self.template_json.get('meta', {})
+            
+            # Sync name and version with meta
+            template_name = meta.get('name')
+            template_version = meta.get('version')
+            
+            if self.name != template_name:
+                raise ValidationError(
+                    f"Template name '{self.name}' must match template_json.meta.name '{template_name}'"
+                )
+            
+            if self.version != template_version:
+                raise ValidationError(
+                    f"Template version '{self.version}' must match template_json.meta.version '{template_version}'"
+                )
+            
+            # Sync category and tier
+            if self.category != meta.get('category', 'custom'):
+                raise ValidationError(
+                    f"Template category '{self.category}' must match template_json.meta.category"
+                )
+            
+            if self.tier != meta.get('tier', 'free'):
+                raise ValidationError(
+                    f"Template tier '{self.tier}' must match template_json.meta.tier"
+                )
+        else:
+            # Inherited template - validate base_preset and overrides
+            if self.base_preset.tenant is not None:
+                raise ValidationError("base_preset must be a preset template (tenant must be None)")
+            
+            if not self.base_preset.is_preset:
+                raise ValidationError("base_preset must be a preset template (is_preset must be True)")
+        
+        # Presets cannot have a tenant
+        if self.is_preset and self.tenant:
+            raise ValidationError("Preset templates cannot be associated with a tenant")
+        
+        # Custom templates must have a tenant
+        if not self.is_preset and not self.tenant:
+            raise ValidationError("Non-preset templates must be associated with a tenant")
+        
+        # Presets cannot extend other templates
+        if self.is_preset and self.base_preset:
+            raise ValidationError("Preset templates cannot extend other templates")
+        
+        # Circular inheritance check
+        if self.base_preset and self.base_preset.base_preset:
+            raise ValidationError("Only one level of inheritance is supported")
+    
+    def save(self, *args, **kwargs):
+        """Override save to enforce validation."""
+        # Run full_clean to trigger clean() method
+        self.full_clean()
+        super().save(*args, **kwargs)
+    
+    def is_read_only(self):
+        """Check if template is read-only (presets are read-only)."""
+        return self.is_preset
+    
+    def get_resolved_template_json(self):
+        """
+        Get the complete resolved template JSON.
+        For inherited templates, merges base_preset.template_json with template_overrides.
+        For standalone templates, returns template_json as-is.
+        """
+        if not self.base_preset:
+            # Standalone template - return as-is
+            return self.template_json
+        
+        # Inherited template - merge base + overrides
+        from .utils import deep_merge_json
+        
+        base_template = self.base_preset.template_json
+        
+        # Get meta from template_json if exists, otherwise create default
+        if self.template_json and 'meta' in self.template_json:
+            meta = self.template_json['meta']
+        else:
+            # Create default meta based on base preset
+            base_meta = base_template.get('meta', {})
+            meta = {
+                'id': str(self.id),
+                'name': self.name,
+                'version': self.version,
+                'category': self.category,
+                'tier': self.tier,
+                'description': f"Based on {self.base_preset.name}",
+                'author': base_meta.get('author'),
+            }
+        
+        # Build complete template JSON
+        resolved = {
+            'meta': meta,
+            'pages': deep_merge_json(
+                base_template.get('pages', {}),
+                self.template_overrides.get('pages', {})
+            ),
+        }
+        
+        # Merge optional fields
+        if 'theme_preset_id' in self.template_overrides:
+            resolved['theme_preset_id'] = self.template_overrides['theme_preset_id']
+        elif 'theme_preset_id' in base_template:
+            resolved['theme_preset_id'] = base_template['theme_preset_id']
+        
+        if 'metadata' in self.template_overrides:
+            resolved['metadata'] = deep_merge_json(
+                base_template.get('metadata', {}),
+                self.template_overrides.get('metadata', {})
+            )
+        elif 'metadata' in base_template:
+            resolved['metadata'] = base_template['metadata']
+        
+        return resolved
+    
+    def get_inheritance_info(self):
+        """Get inheritance information."""
+        if not self.base_preset:
+            return None
+        
+        # Count overrides
+        override_count = self._count_overrides(self.template_overrides)
+        
+        return {
+            'base_preset': {
+                'id': str(self.base_preset.id),
+                'name': self.base_preset.name,
+                'version': self.base_preset.version,
+            },
+            'has_overrides': override_count > 0,
+            'override_count': override_count,
+        }
+    
+    def _count_overrides(self, obj):
+        """Recursively count the number of overrides."""
+        count = 0
+        if isinstance(obj, dict):
+            for value in obj.values():
+                count += self._count_overrides(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                count += self._count_overrides(item)
+        else:
+            # Leaf value - count it
+            count = 1
+        return count
+    
+    @classmethod
+    def get_presets(cls):
+        """Get all preset templates."""
+        return cls.objects.filter(is_preset=True).order_by('category', 'name')
+    
+    @classmethod
+    def get_tenant_templates(cls, tenant):
+        """Get all templates for a specific tenant (custom + presets)."""
+        return cls.objects.filter(
+            models.Q(tenant=tenant) | models.Q(is_preset=True)
+        ).order_by('-is_preset', 'category', 'name')
+    
+    @classmethod
+    def get_by_category(cls, category, tenant=None):
+        """Get templates by category."""
+        query = cls.objects.filter(category=category, is_preset=True)
+        if tenant:
+            query = cls.objects.filter(
+                category=category
+            ).filter(
+                models.Q(tenant=tenant) | models.Q(is_preset=True)
+            )
+        return query.order_by('-is_preset', 'name')
+    
+    @classmethod
+    def get_by_tier(cls, tier, tenant=None):
+        """Get templates by tier."""
+        query = cls.objects.filter(tier=tier, is_preset=True)
+        if tenant:
+            query = cls.objects.filter(
+                tier=tier
+            ).filter(
+                models.Q(tenant=tenant) | models.Q(is_preset=True)
+            )
+        return query.order_by('-is_preset', 'name')
+
+
 class TenantFeatureFlag(models.Model):
     """
     Individual feature flag for a tenant.
@@ -558,56 +936,7 @@ class TenantFeatureFlag(models.Model):
         return f"{self.tenant.name}: {self.key} ({status})"
 
 
-class TenantPageConfig(models.Model):
-    """
-    Page configuration for a tenant.
-    
-    Stores page configurations for dynamic page rendering.
-    """
-    
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text=_("Unique page config identifier")
-    )
-    
-    tenant = models.OneToOneField(
-        Tenant,
-        on_delete=models.CASCADE,
-        related_name='page_config_data',
-        help_text=_("Tenant this page config belongs to")
-    )
-    
-    pages = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text=_("Page configurations keyed by page path")
-    )
-    
-    version = models.CharField(
-        max_length=20,
-        default='1.0.0',
-        help_text=_("Page config schema version")
-    )
-    
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text=_("Page config creation timestamp")
-    )
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        help_text=_("Last update timestamp")
-    )
-    
-    class Meta:
-        db_table = 'tenant_page_configs'
-        verbose_name = _('Tenant Page Configuration')
-        verbose_name_plural = _('Tenant Page Configurations')
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"Page Config for {self.tenant.name} (v{self.version})"
+# TenantPageConfig model removed - replaced by Template system
 
 
 class TenantRoute(models.Model):

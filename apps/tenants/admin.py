@@ -3,7 +3,7 @@ Django admin configuration for Tenant models.
 """
 
 from django.contrib import admin
-from .models import Tenant, Theme, TenantFeatureFlag, TenantPageConfig, TenantRoute
+from .models import Tenant, Theme, TenantFeatureFlag, TenantRoute
 
 
 class TenantFeatureFlagInline(admin.TabularInline):
@@ -128,32 +128,8 @@ class TenantFeatureFlagAdmin(admin.ModelAdmin):
     )
 
 
-@admin.register(TenantPageConfig)
-class TenantPageConfigAdmin(admin.ModelAdmin):
-    """Admin interface for TenantPageConfig model."""
-    
-    list_display = ['tenant', 'version', 'page_count', 'created_at', 'updated_at']
-    list_filter = ['version', 'created_at']
-    search_fields = ['tenant__name', 'tenant__slug']
-    readonly_fields = ['id', 'created_at', 'updated_at', 'page_count']
-    
-    fieldsets = (
-        ('Tenant', {
-            'fields': ('tenant',)
-        }),
-        ('Configuration', {
-            'fields': ('version', 'pages', 'page_count')
-        }),
-        ('Metadata', {
-            'fields': ('id', 'created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
-    
-    def page_count(self, obj):
-        """Display number of configured pages."""
-        return len(obj.pages) if obj.pages else 0
-    page_count.short_description = 'Page Count'
+
+# TenantPageConfigAdmin removed - replaced by Template system
 
 
 @admin.register(TenantRoute)
