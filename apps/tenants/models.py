@@ -175,6 +175,7 @@ class Tenant(models.Model):
         """
         Get the full resolved theme JSON for this tenant.
         If theme uses inheritance, returns merged tokens.
+        Returns None if no theme is configured - UI should provide defaults.
         """
         if not self.theme:
             return None

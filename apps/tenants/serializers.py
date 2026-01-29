@@ -79,57 +79,9 @@ class TenantConfigSerializer(serializers.ModelSerializer):
                 'json': obj.get_resolved_theme(),  # Full raw theme JSON
             }
         
-        # Legacy fallback - return old metadata-based theme
-        default_theme = {
-            'colors': {
-                'primary': '#0066cc',
-                'secondary': '#ff6600',
-                'accent': '#00cc99',
-                'background': '#ffffff',
-                'surface': '#f8f9fa',
-                'text': {
-                    'primary': '#212529',
-                    'secondary': '#6c757d',
-                    'inverse': '#ffffff'
-                },
-                'error': '#dc3545',
-                'success': '#28a745',
-                'warning': '#ffc107'
-            },
-            'fonts': {
-                'primary': 'Inter, sans-serif',
-                'secondary': 'Georgia, serif',
-                'sizes': {
-                    'xs': '0.75rem',
-                    'sm': '0.875rem',
-                    'base': '1rem',
-                    'lg': '1.125rem',
-                    'xl': '1.25rem',
-                    '2xl': '1.5rem',
-                    '3xl': '1.875rem'
-                }
-            },
-            'spacing': {
-                'xs': '0.25rem',
-                'sm': '0.5rem',
-                'md': '1rem',
-                'lg': '1.5rem',
-                'xl': '2rem',
-                '2xl': '3rem'
-            },
-            'borderRadius': {
-                'sm': '0.25rem',
-                'md': '0.5rem',
-                'lg': '1rem',
-                'full': '9999px'
-            },
-            'shadows': {
-                'sm': '0 1px 2px rgba(0,0,0,0.05)',
-                'md': '0 4px 6px rgba(0,0,0,0.1)',
-                'lg': '0 10px 15px rgba(0,0,0,0.1)'
-            }
-        }
-        return obj.metadata.get('theme', default_theme)
+        # Legacy fallback - return old metadata-based theme or None
+        # Frontend should handle defaults when theme is None
+        return obj.metadata.get('theme')
     
     def get_feature_flags(self, obj):
         """
@@ -165,33 +117,8 @@ class TenantConfigSerializer(serializers.ModelSerializer):
             ]
         
         # Fall back to metadata for backward compatibility
-        default_routes = [
-            {
-                'path': '/',
-                'pagePath': '/',
-                'title': 'Home',
-                'protected': False,
-                'layout': 'main',
-                'order': 0
-            },
-            {
-                'path': '/login',
-                'pagePath': '/login',
-                'title': 'Login',
-                'protected': False,
-                'layout': 'none',
-                'order': 1
-            },
-            {
-                'path': '/admin',
-                'pagePath': '/dashboard',
-                'title': 'Dashboard',
-                'protected': True,
-                'layout': 'admin',
-                'order': 2
-            }
-        ]
-        return obj.metadata.get('routes', default_routes)
+        # Return empty list if no routes configured - frontend should handle defaults
+        return obj.metadata.get('routes', [])
     
     def get_page_config(self, obj):
         """
@@ -211,38 +138,11 @@ class TenantConfigSerializer(serializers.ModelSerializer):
                 'template_category': obj.template.category,
             }
         
-        # Default minimal page if no template assigned
-        default_pages = {
-            'home': {
-                'id': 'home',
-                'title': 'Home',
-                'description': f'Welcome to {obj.name}',
-                'layout': {
-                    'type': 'default-layout',
-                    'version': '1.0.0',
-                },
-                'sections': [
-                    {
-                        'id': 'welcome',
-                        'type': 'hero-simple',
-                        'version': '1.0.0',
-                        'props': {
-                            'heading': f'Welcome to {obj.name}',
-                            'subheading': 'Get started by assigning a template to this tenant',
-                            'alignment': 'center',
-                        }
-                    }
-                ],
-                'metadata': {
-                    'metaTitle': f'{obj.name} - Home',
-                    'metaDescription': f'Welcome to {obj.name}',
-                }
-            }
-        }
-        
+        # No template assigned - return None structure
+        # Frontend should handle default pages/layouts
         return {
-            'pages': default_pages,
-            'version': '1.0.0',
+            'pages': None,
+            'version': None,
             'template_id': None,
             'template_name': None,
         }
