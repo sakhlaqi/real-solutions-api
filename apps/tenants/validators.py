@@ -363,52 +363,32 @@ def _validate_template_pages(pages: Any) -> List[str]:
 
 
 def _validate_page_definition(page_key: str, page_def: Any) -> List[str]:
-    """Validate a single page definition."""
+    """
+    Validate a single page definition.
+    
+    Required format: {template, slots}
+    - template: string (name of the layout template to use)
+    - slots: object (configuration for each slot in the template)
+    """
     errors = []
     
     if not isinstance(page_def, dict):
         errors.append(f"template_json.pages.{page_key} must be a dictionary")
         return errors
     
-    # Required fields
-    required_fields = ['id', 'title', 'layout', 'sections']
-    for field in required_fields:
-        if field not in page_def:
-            errors.append(f"template_json.pages.{page_key}.{field} is required")
+    # Require template field
+    if 'template' not in page_def:
+        errors.append(f"template_json.pages.{page_key}.template is required")
+    elif not isinstance(page_def['template'], str):
+        errors.append(f"template_json.pages.{page_key}.template must be a string")
     
-    # Validate layout
-    if 'layout' in page_def:
-        layout = page_def['layout']
-        if not isinstance(layout, dict):
-            errors.append(f"template_json.pages.{page_key}.layout must be a dictionary")
-        elif 'type' not in layout:
-            errors.append(f"template_json.pages.{page_key}.layout.type is required")
-    
-    # Validate sections
-    if 'sections' in page_def:
-        sections = page_def['sections']
-        if not isinstance(sections, list):
-            errors.append(f"template_json.pages.{page_key}.sections must be an array")
-        else:
-            for i, section in enumerate(sections):
-                errors.extend(_validate_section_reference(page_key, i, section))
-    
-    return errors
-
-
-def _validate_section_reference(page_key: str, index: int, section: Any) -> List[str]:
-    """Validate a section reference."""
-    errors = []
-    
-    if not isinstance(section, dict):
-        errors.append(f"template_json.pages.{page_key}.sections[{index}] must be a dictionary")
-        return errors
-    
-    # Required fields
-    required_fields = ['id', 'type']
-    for field in required_fields:
-        if field not in section:
-            errors.append(f"template_json.pages.{page_key}.sections[{index}].{field} is required")
+    # Require slots field
+    if 'slots' not in page_def:
+        errors.append(f"template_json.pages.{page_key}.slots is required")
+    elif not isinstance(page_def['slots'], dict):
+        errors.append(f"template_json.pages.{page_key}.slots must be a dictionary")
+    elif not page_def['slots']:
+        errors.append(f"template_json.pages.{page_key}.slots cannot be empty")
     
     return errors
 
